@@ -22,6 +22,7 @@ import {
 import cors from "cors";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
+import { Timestamp } from "firebase/firestore";
 
 dotenv.config();
 
@@ -1820,6 +1821,61 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
       }
       break;
 
+    case "checkout.session.completed":
+      {
+        const checkoutSession = event.data.object;
+
+        const userId = checkoutSession.metadata?.userId;
+        if (!userId) {
+          break;
+        }
+
+        const userRef = doc(db, "users", userId);
+        const userSnap = await getDoc(userRef);
+
+        if (!userSnap.exists()) {
+          break;
+        }
+
+        const user = userSnap.data();
+        const subscriptionStartDate = new Date();
+        const subscriptionEndDate = new Date();
+        subscriptionEndDate.setDate(subscriptionEndDate.getDate() + 30);
+
+        const subscriptionData = {
+          is_payed: true,
+          subscription_start_date: Timestamp.fromDate(subscriptionStartDate),
+          subscription_end_date: Timestamp.fromDate(subscriptionEndDate),
+          last_payment_date: Timestamp.fromDate(new Date()),
+          payment_method: "card",
+          stripe_session_id: checkoutSession.id,
+          stripe_customer_id: checkoutSession.customer,
+          status: "active",
+          amount_paid: checkoutSession.amount_total / 100,
+        };
+
+        const updateData = {
+          subscription: subscriptionData,
+        };
+
+        if (!user.usageHistory) {
+          user.usageHistory = {};
+        }
+        const monthKey = subscriptionStartDate.toISOString().split("T")[0].substring(0, 7);
+        if (!user.usageHistory[monthKey]) {
+          user.usageHistory[monthKey] = {
+            month: monthKey,
+            workoutsCount: 0,
+            usageCharges: 0,
+            createdAt: new Date(),
+          };
+        }
+        updateData.usageHistory = user.usageHistory;
+
+        await updateDoc(userRef, updateData);
+      }
+      break;
+
     default:
       console.log(`ℹ️ Unhandled event type ${event.type}`);
   }
@@ -2161,6 +2217,735 @@ app.post("/api/partner/cancelPayout", async (req, res) => {
 
 
 
+
+// =============== SUBSCRIPTION PAYMENT SYSTEM ===============
+
+// ✅ Helper: Check if subscription is active
+const isSubscriptionActive = (user) => {
+  if (!user.subscription?.is_payed) return false;
+  const now = new Date();
+  const endDate = user.subscription?.subscription_end_date?.toDate?.() || new Date(user.subscription?.subscription_end_date);
+  return now < endDate;
+};
+
+// ✅ Helper: Calculate usage charges (optional overage charges)
+const calculateUsageCharges = (usageData) => {
+  let charges = 0;
+  // Example: $0.10 per additional workout beyond 20 per month
+  const maxWorkoutsIncluded = 20;
+  if (usageData?.workoutsCount > maxWorkoutsIncluded) {
+    charges = (usageData.workoutsCount - maxWorkoutsIncluded) * 0.10;
+  }
+  return parseFloat(charges.toFixed(2));
+};
+
+// ✅ 1️⃣ Create Payment Intent (Initiate Payment)
+app.post("/api/subscription/createPaymentIntent", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    // Fetch user
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const MONTHLY_PRICE = 700; // $7.00 in cents
+
+    let stripeCustomerId = user.stripe?.customerId;
+
+    // ✅ Create Stripe Customer if not exists
+    if (!stripeCustomerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: `${user.firstName || ""} ${user.lastName || ""}`.trim(),
+        metadata: {
+          userId: userId,
+          appName: "Korpo Fitness",
+        },
+      });
+      stripeCustomerId = customer.id;
+
+      // Save customer ID to Firebase
+      await updateDoc(userRef, {
+        stripe: {
+          customerId: stripeCustomerId,
+          createdAt: new Date(),
+        },
+      });
+    }
+
+    // Create Stripe Payment Intent with customer
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: MONTHLY_PRICE,
+      currency: "usd",
+      customer: stripeCustomerId, // ✅ Link to customer
+      metadata: {
+        userId: userId,
+        type: "subscription",
+      },
+    });
+
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      amount: MONTHLY_PRICE / 100, // Return as dollars
+      message: "Payment intent created",
+      stripeCustomerId: stripeCustomerId,
+    });
+  } catch (error) {
+    console.error("🔥 Error creating payment intent:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 1️⃣.3️⃣ Create Stripe Checkout Session (Online Payment - Redirect to Stripe)
+app.post("/api/subscription/createCheckoutSession", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    // Fetch user
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const MONTHLY_PRICE = 700; // $7.00 in cents
+
+    let stripeCustomerId = user.stripe?.customerId;
+
+    // ✅ Create Stripe Customer if not exists
+    if (!stripeCustomerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: `${user.firstName || ""} ${user.lastName || ""}`.trim(),
+        metadata: {
+          userId: userId,
+          appName: "Korpo Fitness",
+        },
+      });
+      stripeCustomerId = customer.id;
+
+      // Save customer ID to Firebase
+      await updateDoc(userRef, {
+        stripe: {
+          customerId: stripeCustomerId,
+          createdAt: new Date(),
+        },
+      });
+    }
+
+    // Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      customer: stripeCustomerId,
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: "Korpo Fitness - Monthly Subscription",
+              description: "30-day subscription to Korpo Fitness",
+              images: [],
+            },
+            unit_amount: MONTHLY_PRICE,
+          },
+          quantity: 1,
+        },
+      ],
+      success_url: `${process.env.FRONTEND_URL || "http://localhost:3000"}/subscription/success?sessionId={CHECKOUT_SESSION_ID}&userId=${userId}`,
+      cancel_url: `${process.env.FRONTEND_URL || "http://localhost:3000"}/subscription/cancel?userId=${userId}`,
+      metadata: {
+        userId: userId,
+        type: "subscription",
+      },
+    });
+
+    res.json({
+      success: true,
+      checkoutUrl: session.url, // ← This is the URL to redirect to
+      sessionId: session.id,
+      message: "Redirect user to this URL to pay",
+      nextStep: "After payment, user will be redirected to success_url"
+    });
+  } catch (error) {
+    console.error("🔥 Error creating checkout session:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 1️⃣.5️⃣ Charge Card (Test Endpoint - Confirms Payment Intent)
+app.post("/api/subscription/chargeCard", async (req, res) => {
+  try {
+    const { paymentIntentId, userId } = req.body;
+
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: "paymentIntentId is required", is_payed: false });
+    }
+
+    // Retrieve the current payment intent
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    // Check if payment intent already succeeded
+    if (paymentIntent.status === "succeeded") {
+      return res.json({
+        success: true,
+        is_payed: true,
+        message: "Payment already succeeded",
+        paymentIntentId: paymentIntentId,
+        status: "succeeded",
+        amount: paymentIntent.amount / 100,
+      });
+    }
+
+    // If payment intent requires payment method, confirm it with a test card
+    let confirmedIntent = paymentIntent;
+
+    if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "requires_action") {
+      // Confirm with test card token
+      try {
+        confirmedIntent = await stripe.paymentIntents.confirm(paymentIntentId, {
+          payment_method: "pm_card_visa", // Stripe test Visa card token
+          return_url: "http://localhost:5000/api/subscription/status",
+        });
+      } catch (confirmError) {
+        console.error("❌ Payment confirmation failed:", confirmError.message);
+        return res.status(400).json({
+          success: false,
+          is_payed: false,
+          error: confirmError.message,
+          status: "failed",
+        });
+      }
+    }
+
+    // Check if payment succeeded
+    if (confirmedIntent.status === "succeeded") {
+      return res.json({
+        success: true,
+        is_payed: true,
+        message: "Card charged successfully",
+        paymentIntentId: paymentIntentId,
+        status: "succeeded",
+        amount: confirmedIntent.amount / 100,
+        nextStep: "Use /api/subscription/confirmPayment to activate subscription",
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        is_payed: false,
+        error: `Payment status: ${confirmedIntent.status}`,
+        status: confirmedIntent.status,
+        message: "Card was not charged. May require additional action.",
+      });
+    }
+  } catch (error) {
+    console.error("🔥 Error charging card:", error);
+    res.status(500).json({
+      success: false,
+      is_payed: false,
+      error: error.message,
+    });
+  }
+});
+
+// ✅ 2️⃣ Confirm Payment & Activate Subscription
+app.post("/api/subscription/confirmPayment", async (req, res) => {
+  try {
+    const { userId, paymentIntentId } = req.body;
+
+    if (!userId || !paymentIntentId) {
+      return res.status(400).json({ error: "userId and paymentIntentId are required" });
+    }
+
+    // Fetch payment intent from Stripe
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    if (paymentIntent.status !== "succeeded") {
+      return res.status(400).json({ error: "Payment not successful" });
+    }
+
+    // Fetch user
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+
+    // Calculate subscription period
+    const subscriptionStartDate = new Date();
+    const subscriptionEndDate = new Date();
+    subscriptionEndDate.setDate(subscriptionEndDate.getDate() + 30); // 30 days
+
+    // Initialize or update subscription
+    const subscriptionData = {
+      is_payed: true,
+      subscription_start_date: Timestamp.fromDate(subscriptionStartDate),
+      subscription_end_date: Timestamp.fromDate(subscriptionEndDate),
+      last_payment_date: Timestamp.fromDate(new Date()),
+      payment_method: paymentIntent.payment_method,
+      stripe_payment_intent_id: paymentIntentId,
+      stripe_customer_id: paymentIntent.customer,
+      status: "active",
+      amount_paid: paymentIntent.amount / 100, // Store as dollars
+    };
+
+    // Create usage history for this month if not exists
+    const monthKey = subscriptionStartDate.toISOString().split("T")[0].substring(0, 7); // YYYY-MM
+    if (!user.usageHistory) {
+      user.usageHistory = {};
+    }
+    if (!user.usageHistory[monthKey]) {
+      user.usageHistory[monthKey] = {
+        month: monthKey,
+        workoutsCount: 0,
+        usageCharges: 0,
+        createdAt: new Date(),
+      };
+    }
+
+    // Update user document with subscription data
+    const updateData = {
+      subscription: subscriptionData,
+      usageHistory: user.usageHistory,
+    };
+
+    // Also update the stripe object in user doc
+    if (user.stripe) {
+      updateData.stripe = {
+        ...user.stripe,
+        customerId: paymentIntent.customer,
+        lastPaymentIntentId: paymentIntentId,
+        lastPaymentDate: new Date(),
+      };
+    }
+
+    await updateDoc(userRef, updateData);
+
+    // Send confirmation email (DISABLED FOR TESTING - NO EMAIL CREDENTIALS)
+    if (user.email && false) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: "🎉 Subscription Activated - Korpo Fitness",
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+            <h2 style="color: #4CAF50;">Payment Successful!</h2>
+            <p>Hello ${user.firstName || "User"},</p>
+            <p>Your subscription has been activated successfully.</p>
+            <ul>
+              <li><strong>Amount:</strong> $7.00</li>
+              <li><strong>Start Date:</strong> ${subscriptionStartDate.toDateString()}</li>
+              <li><strong>Expiry Date:</strong> ${subscriptionEndDate.toDateString()}</li>
+              <li><strong>Status:</strong> Active ✅</li>
+            </ul>
+            <p>You now have full access to Korpo Fitness. Enjoy your workout!</p>
+            <hr>
+            <small style="color: #777;">This is an automated message. Please do not reply.</small>
+          </div>
+        `,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Subscription activated successfully",
+      subscription: subscriptionData,
+    });
+  } catch (error) {
+    console.error("🔥 Error confirming payment:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 3️⃣ Check Subscription Status
+app.get("/api/subscription/status/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const isActive = isSubscriptionActive(user);
+
+    const endDate = user.subscription?.subscription_end_date?.toDate?.() || 
+                    new Date(user.subscription?.subscription_end_date);
+
+    const daysRemaining = isActive 
+      ? Math.floor((endDate - new Date()) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    res.json({
+      isActive,
+      is_payed: user.subscription?.is_payed || false,
+      daysRemaining,
+      subscriptionStartDate: user.subscription?.subscription_start_date,
+      subscriptionEndDate: user.subscription?.subscription_end_date,
+      lastPaymentDate: user.subscription?.last_payment_date,
+    });
+  } catch (error) {
+    console.error("🔥 Error checking subscription status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 4️⃣ Track Usage (log workouts/actions)
+app.post("/api/subscription/trackUsage", async (req, res) => {
+  try {
+    const { userId, usageType, amount = 1 } = req.body;
+
+    if (!userId || !usageType) {
+      return res.status(400).json({ error: "userId and usageType are required" });
+    }
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+
+    // ⚠️ USAGE TRACKING DISABLED FOR TESTING
+    // Users can track usage even without active subscription
+    // if (!isSubscriptionActive(user)) {
+    //   return res.status(403).json({ error: "Subscription expired. Please renew to continue." });
+    // }
+
+    // Get current month key
+    const now = new Date();
+    const monthKey = now.toISOString().split("T")[0].substring(0, 7); // YYYY-MM
+
+    const usageHistory = user.usageHistory || {};
+    if (!usageHistory[monthKey]) {
+      usageHistory[monthKey] = {
+        month: monthKey,
+        workoutsCount: 0,
+        usageCharges: 0,
+        createdAt: new Date(),
+      };
+    }
+
+    // Track based on usage type
+    if (usageType === "workout") {
+      usageHistory[monthKey].workoutsCount = (usageHistory[monthKey].workoutsCount || 0) + amount;
+    }
+
+    // Calculate overage charges
+    usageHistory[monthKey].usageCharges = calculateUsageCharges(usageHistory[monthKey]);
+
+    // Update user
+    await updateDoc(userRef, { usageHistory });
+
+    res.json({
+      success: true,
+      message: `Usage tracked: ${usageType}`,
+      monthData: usageHistory[monthKey],
+    });
+  } catch (error) {
+    console.error("🔥 Error tracking usage:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 5️⃣ Get Usage History
+app.get("/api/subscription/usageHistory/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const usageHistory = user.usageHistory || {};
+
+    res.json({
+      success: true,
+      usageHistory,
+      totalMonths: Object.keys(usageHistory).length,
+    });
+  } catch (error) {
+    console.error("🔥 Error fetching usage history:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 5️⃣ (New) Get Stripe Customer Details
+app.get("/api/subscription/customer/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const stripeCustomerId = user.stripe?.customerId;
+
+    if (!stripeCustomerId) {
+      return res.status(404).json({ error: "No Stripe customer found for this user" });
+    }
+
+    // Fetch customer from Stripe
+    const customer = await stripe.customers.retrieve(stripeCustomerId);
+
+    // Fetch customer invoices
+    const invoices = await stripe.invoices.list({
+      customer: stripeCustomerId,
+      limit: 10,
+    });
+
+    // Fetch customer payment methods
+    const paymentMethods = await stripe.customers.listPaymentMethods(
+      stripeCustomerId,
+      { type: "card" }
+    );
+
+    res.json({
+      success: true,
+      customer: {
+        id: customer.id,
+        email: customer.email,
+        name: customer.name,
+        description: customer.description,
+        created: new Date(customer.created * 1000),
+        balance: customer.balance,
+        currency: customer.currency,
+        defaultPaymentMethod: customer.invoice_settings?.default_payment_method,
+      },
+      invoices: invoices.data.map((inv) => ({
+        id: inv.id,
+        number: inv.number,
+        amount: inv.amount_paid / 100,
+        currency: inv.currency,
+        status: inv.status,
+        created: new Date(inv.created * 1000),
+        due_date: inv.due_date ? new Date(inv.due_date * 1000) : null,
+      })),
+      paymentMethods: paymentMethods.data.map((pm) => ({
+        id: pm.id,
+        type: pm.type,
+        brand: pm.card?.brand,
+        lastFourDigits: pm.card?.last4,
+        expMonth: pm.card?.exp_month,
+        expYear: pm.card?.exp_year,
+        billingDetails: pm.billing_details,
+      })),
+    });
+  } catch (error) {
+    console.error("🔥 Error fetching Stripe customer:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 6️⃣ Middleware: Check Active Subscription (Protect Routes)
+export const requireActiveSubscription = async (req, res, next) => {
+  try {
+    const userId = req.headers["user-id"] || req.params.userId || req.body.userId;
+
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+
+    if (!isSubscriptionActive(user)) {
+      return res.status(403).json({
+        error: "Access denied. Subscription is inactive or expired.",
+        requiresPayment: true,
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error("🔥 Subscription check error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ✅ 7️⃣ Auto-renew subscription reminder (runs on subscription end date)
+cron.schedule("0 9 * * *", async () => {
+  console.log("🔔 Running subscription renewal check...");
+
+  const usersSnap = await getDocs(collection(db, "users"));
+
+  usersSnap.forEach(async (docSnap) => {
+    const user = docSnap.data();
+    
+    if (!user.subscription?.subscription_end_date) return;
+
+    const endDate = user.subscription.subscription_end_date?.toDate?.() || 
+                    new Date(user.subscription.subscription_end_date);
+    const now = new Date();
+
+    // If subscription expires in 3 days, send reminder
+    const daysUntilExpiry = Math.floor((endDate - now) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilExpiry === 3 && user.email) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: "⏰ Your Korpo Subscription Expires Soon",
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+            <h2 style="color: #FF9800;">Subscription Expiring Soon!</h2>
+            <p>Hello ${user.firstName || "User"},</p>
+            <p>Your Korpo Fitness subscription will expire in <strong>3 days</strong> (${endDate.toDateString()}).</p>
+            <p>To avoid interruption, please renew your subscription now for just <strong>$7.00/month</strong>.</p>
+            <p style="margin-top: 20px;">
+              <a href="https://your-app.com/renew" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Renew Now</a>
+            </p>
+            <hr>
+            <small style="color: #777;">This is an automated message. Please do not reply.</small>
+          </div>
+        `,
+      });
+      console.log(`✅ Sent renewal reminder to: ${user.email}`);
+    }
+  });
+});
+
+// ✅ 8️⃣ ADMIN: Manually extend/modify subscription
+app.post("/api/subscription/admin/extend", async (req, res) => {
+  try {
+    const { userId, daysToAdd = 30 } = req.body;
+    // ⚠️ In production, add authentication/authorization check
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+    const currentEndDate = user.subscription?.subscription_end_date?.toDate?.() || new Date();
+
+    // Calculate new end date
+    const newEndDate = new Date(currentEndDate);
+    newEndDate.setDate(newEndDate.getDate() + daysToAdd);
+
+    // Update subscription
+    await updateDoc(userRef, {
+      "subscription.subscription_end_date": Timestamp.fromDate(newEndDate),
+      "subscription.is_payed": true,
+      "subscription.status": "active",
+      "subscription.last_extended_at": new Date(),
+    });
+
+    res.json({
+      success: true,
+      message: `Subscription extended by ${daysToAdd} days`,
+      newEndDate: newEndDate,
+    });
+  } catch (error) {
+    console.error("🔥 Error extending subscription:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ 9️⃣ ADMIN: Revoke/cancel subscription
+app.post("/api/subscription/admin/revoke", async (req, res) => {
+  try {
+    const { userId, reason } = req.body;
+    // ⚠️ In production, add authentication/authorization check
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = userSnap.data();
+
+    // Mark as inactive
+    await updateDoc(userRef, {
+      "subscription.is_payed": false,
+      "subscription.status": "cancelled",
+      "subscription.cancelled_at": new Date(),
+      "subscription.cancellation_reason": reason || "Admin revoke",
+    });
+
+    // Send notification email
+    if (user.email) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: "⚠️ Subscription Cancelled",
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+            <h2 style="color: #D32F2F;">Subscription Cancelled</h2>
+            <p>Hello ${user.firstName || "User"},</p>
+            <p>Your Korpo Fitness subscription has been cancelled.</p>
+            <p><strong>Reason:</strong> ${reason || "Admin action"}</p>
+            <p>If you have questions, please contact our support team.</p>
+            <hr>
+            <small style="color: #777;">This is an automated message. Please do not reply.</small>
+          </div>
+        `,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Subscription cancelled",
+      user: userId,
+    });
+  } catch (error) {
+    console.error("🔥 Error revoking subscription:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============== END SUBSCRIPTION SYSTEM ===============
 
 // ------------------- Start Server -------------------
 const PORT = process.env.PORT || 5000;
