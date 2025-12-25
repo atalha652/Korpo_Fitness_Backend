@@ -88,7 +88,6 @@ cron.schedule("0 0 25 * *", async () => {
 
 // ------------------- Test Endpoint -------------------
 app.get("/hello", (req, res) => {
-  console.log("Stripe key:", process.env.STRIPE_SECRET_KEY);
   res.json({
     message: "Hello! The server is running with full potential 🚀",
     stripeKey: process.env.STRIPE_SECRET_KEY, // ⚠️ remove if you don’t want to expose your secret key
@@ -1738,6 +1737,9 @@ app.get("/reauth", (req, res) => {
 app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
   console.log('📩 Webhook called');
   const sig = req.headers["stripe-signature"];
+  
+  console.log("🔍 Debug - Stripe Webhook Secret exists:", !!process.env.STRIPE_WEBHOOK_SECRET);
+  console.log("🔍 Debug - Signature header:", sig ? "✅ Present" : "❌ Missing");
 
   let event;
   try {
@@ -1746,6 +1748,7 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
+    console.log("✅ Webhook signature verified! Event type:", event.type);
   } catch (err) {
     console.error("❌ Webhook signature verification failed:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -1855,6 +1858,9 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
         };
 
         const updateData = {
+          is_payed: true,  // ✅ Set payment status at user level
+          payment_date: Timestamp.fromDate(new Date()),  // ✅ Track when payment was made
+          stripe_customer_id: checkoutSession.customer,  // ✅ Store Stripe customer ID
           subscription: subscriptionData,
         };
 
@@ -1873,6 +1879,41 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
         updateData.usageHistory = user.usageHistory;
 
         await updateDoc(userRef, updateData);
+        console.log(`✅ Payment recorded for user ${userId}: is_payed = true`);
+
+        // ✅ Send payment success email
+        if (user.email) {
+          const amountPaid = (checkoutSession.amount_total / 100).toFixed(2);
+          await transporter.sendMail({
+            from: `"Korpo" <${process.env.EMAIL_USER}>`,
+            to: user.email,
+            subject: "💳 Payment Successful - Subscription Activated",
+            html: `
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                <h2 style="color: #4CAF50;">Payment Successful ✅</h2>
+                <p>Dear ${user.name || "User"},</p>
+                <p>Thank you for your payment! Your subscription has been successfully activated.</p>
+                <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <p><strong>Subscription Details:</strong></p>
+                  <ul>
+                    <li><strong>Amount Paid:</strong> $${amountPaid}</li>
+                    <li><strong>Start Date:</strong> ${subscriptionStartDate.toDateString()}</li>
+                    <li><strong>End Date:</strong> ${subscriptionEndDate.toDateString()}</li>
+                    <li><strong>Duration:</strong> 30 days</li>
+                    <li><strong>Transaction ID:</strong> ${checkoutSession.id}</li>
+                  </ul>
+                </div>
+                <p>You can now enjoy all the benefits of your subscription. Start exploring today! 🚀</p>
+                <p style="margin-top: 20px;">If you have any questions, feel free to contact our support team.</p>
+                <p style="margin-top: 30px;">Best regards,</p>
+                <p><b>Korpo Team</b></p>
+                <hr>
+                <small style="color: #777;">This is an automated message. Please do not reply to this email.</small>
+              </div>
+            `,
+          });
+          console.log(`📧 Payment success email sent to: ${user.email}`);
+        }
       }
       break;
 
@@ -2342,6 +2383,7 @@ app.post("/api/subscription/createCheckoutSession", async (req, res) => {
 
       // Save customer ID to Firebase
       await updateDoc(userRef, {
+        is_payed: false,  // ✅ Set default payment status
         stripe: {
           customerId: stripeCustomerId,
           createdAt: new Date(),
