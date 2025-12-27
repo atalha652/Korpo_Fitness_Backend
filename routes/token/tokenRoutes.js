@@ -1,0 +1,482 @@
+/**
+ * Token Routes
+ * API endpoints for token management
+ * Implements blended token pricing for B2C users
+ */
+
+import express from 'express';
+import {
+  getUserTokenBalance,
+  addTokensToUser,
+  deductTokensFromUser,
+  processAIServiceRequest,
+  getOpenRouterCredits,
+  getTokenTransactionHistory,
+} from '../../controllers/token/tokenController.js';
+import {
+  createTokenPurchaseSession,
+  createTokenPaymentIntent,
+  getCheckoutSession,
+  verifyWebhookSignature,
+} from '../../services/stripe/tokenStripeService.js';
+import { calculateTokenPrice, getTokenLimits } from '../../utils/tokenPricing.js';
+import { checkPlatformFeeRequired } from '../../utils/platformFeeHelper.js';
+
+const router = express.Router();
+
+/**
+ * @route GET /api/tokens/balance/:userId
+ * @desc Get user's token balance
+ */
+router.get('/balance/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const result = await getUserTokenBalance(userId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error in GET /api/tokens/balance:', error);
+    res.status(error.message === 'User not found' ? 404 : 500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route GET /api/tokens/pricing/limits
+ * @desc Get token purchase limits and pricing info
+ */
+router.get('/pricing/limits', async (req, res) => {
+  try {
+    const limits = getTokenLimits();
+    res.json({
+      success: true,
+      ...limits,
+    });
+  } catch (error) {
+    console.error('Error in GET /api/tokens/pricing/limits:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route GET /api/tokens/platform-fee/status/:userId
+ * @desc Check if user needs to pay platform fee
+ */
+router.get('/platform-fee/status/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const status = await checkPlatformFeeRequired(userId);
+    res.json({
+      success: true,
+      ...status,
+    });
+  } catch (error) {
+    console.error('Error in GET /api/tokens/platform-fee/status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/purchase/checkout
+ * @desc Create Stripe checkout session for token purchase
+ * Backend validates token quantity and recalculates price
+ */
+router.post('/purchase/checkout', async (req, res) => {
+  try {
+    const { userId, tokens, price, successUrl, cancelUrl } = req.body;
+
+    // Validation
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid userId is required',
+      });
+    }
+
+    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid positive integer tokens required',
+      });
+    }
+
+    const session = await createTokenPurchaseSession({
+      userId,
+      tokens,
+      price, // Optional: for validation
+      successUrl,
+      cancelUrl,
+    });
+
+    res.json(session);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/purchase/checkout:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/purchase/intent
+ * @desc Create Stripe payment intent for token purchase
+ */
+router.post('/purchase/intent', async (req, res) => {
+  try {
+    const { userId, tokens, price } = req.body;
+
+    // Validation
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid userId is required',
+      });
+    }
+
+    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid positive integer tokens required',
+      });
+    }
+
+    const intent = await createTokenPaymentIntent({
+      userId,
+      tokens,
+      price, // Optional: for validation
+    });
+
+    res.json(intent);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/purchase/intent:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/purchase/confirm
+ * @desc Confirm token purchase after successful payment
+ */
+router.post('/purchase/confirm', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid sessionId is required',
+      });
+    }
+
+    const sessionResult = await getCheckoutSession(sessionId);
+    const session = sessionResult.session;
+
+    if (session.payment_status !== 'paid') {
+      return res.status(400).json({
+        success: false,
+        error: 'Payment not completed',
+      });
+    }
+
+    const { userId, tokens, tokenPrice, platformFee, totalPrice } = session.metadata;
+
+    if (!userId || !tokens) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid session metadata',
+      });
+    }
+
+    // Add tokens to user
+    const result = await addTokensToUser(
+      userId,
+      parseInt(tokens),
+      'purchase',
+      {
+        sessionId,
+        tokenPrice: tokenPrice ? parseFloat(tokenPrice) : undefined,
+        platformFee: platformFee ? parseFloat(platformFee) : undefined,
+        totalPrice: totalPrice ? parseFloat(totalPrice) : session.amount_total / 100, // Convert from cents
+        paymentIntentId: session.payment_intent,
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'Tokens added successfully',
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error in POST /api/tokens/purchase/confirm:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/webhook
+ * @desc Stripe webhook handler for token purchases
+ */
+router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const signature = req.headers['stripe-signature'];
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing stripe-signature header',
+      });
+    }
+
+    const result = verifyWebhookSignature(req.body, signature);
+    const event = result.event;
+
+    // Handle the event
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+
+      if (session.metadata?.type === 'token_purchase' && session.payment_status === 'paid') {
+        const { userId, tokens } = session.metadata;
+
+        if (userId && tokens) {
+          const { tokenPrice, platformFee, totalPrice } = session.metadata;
+          await addTokensToUser(
+            userId,
+            parseInt(tokens),
+            'purchase',
+            {
+              sessionId: session.id,
+              tokenPrice: tokenPrice ? parseFloat(tokenPrice) : undefined,
+              platformFee: platformFee ? parseFloat(platformFee) : undefined,
+              totalPrice: totalPrice ? parseFloat(totalPrice) : session.amount_total / 100,
+              paymentIntentId: session.payment_intent,
+            }
+          );
+
+          console.log(`✅ Tokens added to user ${userId}: ${tokens} tokens`);
+        }
+      }
+    } else if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object;
+
+      if (paymentIntent.metadata?.type === 'token_purchase') {
+        const { userId, tokens } = paymentIntent.metadata;
+
+        if (userId && tokens) {
+          const { tokenPrice, platformFee, totalPrice } = paymentIntent.metadata;
+          await addTokensToUser(
+            userId,
+            parseInt(tokens),
+            'purchase',
+            {
+              paymentIntentId: paymentIntent.id,
+              tokenPrice: tokenPrice ? parseFloat(tokenPrice) : undefined,
+              platformFee: platformFee ? parseFloat(platformFee) : undefined,
+              totalPrice: totalPrice ? parseFloat(totalPrice) : paymentIntent.amount / 100,
+            }
+          );
+
+          console.log(`✅ Tokens added to user ${userId}: ${tokens} tokens`);
+        }
+      }
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Error in POST /api/tokens/webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/ai/request
+ * @desc Process AI service request and deduct tokens
+ * Model: google/gemini-3-flash-preview
+ */
+router.post('/ai/request', async (req, res) => {
+  try {
+    const { userId, messages, model, options } = req.body;
+
+    // Validation
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid userId is required',
+      });
+    }
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid messages array is required',
+      });
+    }
+
+    // Validate message structure
+    for (const msg of messages) {
+      if (!msg.role || !msg.content) {
+        return res.status(400).json({
+          success: false,
+          error: 'Each message must have role and content',
+        });
+      }
+    }
+
+    const result = await processAIServiceRequest(userId, {
+      messages,
+      model: model || 'google/gemini-3-flash-preview',
+      options: options || {},
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/ai/request:', error);
+    const statusCode = error.message.includes('Insufficient') ? 403 : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route GET /api/tokens/openrouter/credits
+ * @desc Get OpenRouter credit information
+ */
+router.get('/openrouter/credits', async (req, res) => {
+  try {
+    const result = await getOpenRouterCredits();
+    res.json(result);
+  } catch (error) {
+    console.error('Error in GET /api/tokens/openrouter/credits:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route GET /api/tokens/history/:userId
+ * @desc Get token transaction history
+ */
+router.get('/history/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit } = req.query;
+
+    const result = await getTokenTransactionHistory(
+      userId,
+      limit ? parseInt(limit) : 50
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error in GET /api/tokens/history:', error);
+    res.status(error.message === 'Valid user ID is required' ? 400 : 500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/add
+ * @desc Manually add tokens to user (admin/manual operation)
+ */
+router.post('/add', async (req, res) => {
+  try {
+    const { userId, tokens, source, metadata } = req.body;
+
+    // Validation
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid userId is required',
+      });
+    }
+
+    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid positive integer tokens required',
+      });
+    }
+
+    const result = await addTokensToUser(
+      userId,
+      tokens,
+      source || 'manual',
+      metadata || {}
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/add:', error);
+    res.status(error.message === 'User not found' ? 404 : 500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/deduct
+ * @desc Manually deduct tokens from user (admin/manual operation)
+ */
+router.post('/deduct', async (req, res) => {
+  try {
+    const { userId, tokens, reason, metadata } = req.body;
+
+    // Validation
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid userId is required',
+      });
+    }
+
+    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid positive integer tokens required',
+      });
+    }
+
+    const result = await deductTokensFromUser(
+      userId,
+      tokens,
+      reason || 'manual',
+      metadata || {}
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/deduct:', error);
+    const statusCode = error.message.includes('Insufficient') ? 403 : 
+                      error.message === 'User not found' ? 404 : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+export default router;
+

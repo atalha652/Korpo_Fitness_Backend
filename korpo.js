@@ -23,6 +23,7 @@ import cors from "cors";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
 import { Timestamp } from "firebase/firestore";
+import tokenRoutes from "./routes/token/tokenRoutes.js";
 
 dotenv.config();
 
@@ -2988,6 +2989,11 @@ app.post("/api/subscription/admin/revoke", async (req, res) => {
 });
 
 // =============== END SUBSCRIPTION SYSTEM ===============
+
+// =============== TOKEN MANAGEMENT SYSTEM ===============
+// Mount token routes
+app.use('/api/tokens', tokenRoutes);
+// =============== END TOKEN MANAGEMENT SYSTEM ===============
 
 // ------------------- Start Server -------------------
 const PORT = process.env.PORT || 5000;
