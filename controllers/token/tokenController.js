@@ -15,8 +15,9 @@ import {
   getDocs,
   increment,
   serverTimestamp,
+  setDoc,
 } from 'firebase/firestore';
-import { createChatCompletion, fetchUserCredits } from '../../services/openrouter/openRouterService.js';
+import { createChatCompletion, fetchUserCredits, fetchAccountCredits } from '../../services/openrouter/openRouterService.js';
 import { calculateInternalCost } from '../../utils/tokenPricing.js';
 
 /**
@@ -74,11 +75,25 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
     const userRef = doc(db, 'users', userId);
     const userSnap = await getDoc(userRef);
 
+    let userData;
     if (!userSnap.exists()) {
-      throw new Error('User not found');
+      // For token purchases, create user document if it doesn't exist
+      if (source === 'purchase') {
+        console.log(`📝 Creating new user document for ${userId} during token purchase`);
+        const newUserData = {
+          tokenBalance: 0,
+          tokenHistory: [],
+          createdAt: serverTimestamp(),
+        };
+        await setDoc(userRef, newUserData);
+        userData = { tokenBalance: 0, tokenHistory: [] };
+      } else {
+        throw new Error('User not found');
+      }
+    } else {
+      userData = userSnap.data();
     }
 
-    const userData = userSnap.data();
     const currentBalance = userData.tokenBalance || 0;
     const newBalance = currentBalance + tokens;
 
@@ -292,6 +307,73 @@ export async function getOpenRouterCredits() {
     };
   } catch (error) {
     console.error('Error fetching OpenRouter credits:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get OpenRouter account credits (remaining balance)
+ * Uses /credits endpoint
+ * @param {string} apiKey - Optional API key, uses env if not provided
+ * @param {boolean} includeRaw - Include raw API response for debugging
+ * @returns {Promise<Object>} Credit information
+ */
+export async function getOpenRouterAccountCredits(apiKey = null, includeRaw = true) {
+  try {
+    const credits = await fetchAccountCredits(apiKey);
+    
+    const result = {
+      success: true,
+      credits: credits.credits,
+      totalUsage: credits.totalUsage || 0,
+      remainingTokens: credits.remainingTokens || 0,
+      pricePerMToken: credits.pricePerMToken || 1.30,
+    };
+    
+    // Always include raw response for debugging (can be removed later)
+    if (credits.rawResponse) {
+      result.rawResponse = credits.rawResponse;
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error fetching OpenRouter account credits:', error);
+    throw error;
+  }
+}
+
+/**
+ * Validate if token purchase is allowed based on OpenRouter credits
+ * @param {number} requestedTokens - Number of tokens user wants to purchase
+ * @param {string} apiKey - Optional API key, uses env if not provided
+ * @returns {Promise<Object>} Validation result
+ */
+export async function validateTokenPurchase(requestedTokens, apiKey = null) {
+  try {
+    if (!requestedTokens || typeof requestedTokens !== 'number' || requestedTokens <= 0) {
+      throw new Error('Valid positive number of tokens is required');
+    }
+
+    // Get current OpenRouter account credits
+    const creditsInfo = await getOpenRouterAccountCredits(apiKey, false);
+    const remainingTokens = creditsInfo.remainingTokens || 0;
+
+    // Check if requested tokens exceed available tokens
+    const canPurchase = requestedTokens <= remainingTokens;
+
+    return {
+      success: true,
+      canPurchase: canPurchase,
+      requestedTokens: requestedTokens,
+      remainingTokens: remainingTokens,
+      credits: creditsInfo.credits,
+      pricePerMToken: creditsInfo.pricePerMToken,
+      message: canPurchase 
+        ? `Purchase allowed. ${remainingTokens.toLocaleString()} tokens available.`
+        : `Purchase not allowed. Requested ${requestedTokens.toLocaleString()} tokens, but only ${remainingTokens.toLocaleString()} tokens available.`,
+    };
+  } catch (error) {
+    console.error('Error validating token purchase:', error);
     throw error;
   }
 }

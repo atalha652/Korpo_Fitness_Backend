@@ -54,6 +54,90 @@ export async function fetchUserCredits() {
 }
 
 /**
+ * Fetch account credits from OpenRouter
+ * Uses the /credits endpoint to get remaining credits
+ * @param {string} apiKey - OpenRouter API key (optional, uses env if not provided)
+ * @returns {Promise<Object>} Credit information
+ */
+export async function fetchAccountCredits(apiKey = null) {
+  try {
+    const keyToUse = apiKey || getApiKey();
+    
+    if (!keyToUse) {
+      throw new Error('OpenRouter API key is required');
+    }
+
+    const response = await fetch(`${OPENROUTER_API_URL}/credits`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${keyToUse.trim()}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    
+    // Log response for debugging
+    console.log('OpenRouter Credits API Response:', JSON.stringify(data, null, 2));
+    
+    // Try different possible response structures
+    let credits = 0;
+    
+    // Check various possible paths for credits
+    if (data.data !== undefined) {
+      // If data exists, check multiple possible fields
+      // OpenRouter /credits endpoint returns total_credits
+      credits = data.data.total_credits ?? 
+                data.data.credits ?? 
+                data.data.balance ?? 
+                data.data.remaining ?? 
+                data.data.credit_balance ??
+                (typeof data.data === 'number' ? data.data : 0);
+    } else if (data.total_credits !== undefined) {
+      // Direct total_credits field
+      credits = data.total_credits;
+    } else if (data.credits !== undefined) {
+      // Direct credits field
+      credits = data.credits;
+    } else if (typeof data === 'number') {
+      // Response might be a direct number
+      credits = data;
+    } else if (Array.isArray(data) && data.length > 0) {
+      // Response might be an array
+      credits = data[0]?.total_credits ?? data[0]?.credits ?? data[0]?.balance ?? 0;
+    }
+    
+    // Extract total_usage if available
+    const totalUsage = data.data?.total_usage ?? data.total_usage ?? 0;
+    
+    // Calculate remaining tokens based on credits
+    // $1.30 per 1M tokens, so: credits / 1.30 * 1,000,000
+    const PRICE_PER_M_TOKEN = 1.30;
+    const creditsAmount = typeof credits === 'number' ? credits : 0;
+    const remainingTokens = creditsAmount > 0 
+      ? Math.floor((creditsAmount / PRICE_PER_M_TOKEN) * 1000000)
+      : 0;
+    
+    return {
+      success: true,
+      credits: creditsAmount,
+      totalUsage: typeof totalUsage === 'number' ? totalUsage : 0,
+      remainingTokens: remainingTokens,
+      pricePerMToken: PRICE_PER_M_TOKEN,
+      rawResponse: data,
+    };
+  } catch (error) {
+    console.error('Error fetching OpenRouter account credits:', error);
+    throw error;
+  }
+}
+
+/**
  * Get model information from OpenRouter
  * @param {string} modelId - Model identifier (default: google/gemini-3-flash-preview)
  * @returns {Promise<Object>} Model information

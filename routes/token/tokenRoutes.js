@@ -11,6 +11,8 @@ import {
   deductTokensFromUser,
   processAIServiceRequest,
   getOpenRouterCredits,
+  getOpenRouterAccountCredits,
+  validateTokenPurchase,
   getTokenTransactionHistory,
 } from '../../controllers/token/tokenController.js';
 import {
@@ -367,6 +369,95 @@ router.get('/openrouter/credits', async (req, res) => {
     console.error('Error in GET /api/tokens/openrouter/credits:', error);
     res.status(500).json({
       success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route GET /api/tokens/openrouter/account/credits
+ * @desc Get OpenRouter account remaining credits from /credits endpoint (uses server API key from env)
+ */
+router.get('/openrouter/account/credits', async (req, res) => {
+  try {
+    const { includeRaw } = req.query;
+    const result = await getOpenRouterAccountCredits(null, includeRaw === 'true');
+    res.json(result);
+  } catch (error) {
+    console.error('Error in GET /api/tokens/openrouter/account/credits:', error);
+    const statusCode = error.message.includes('required') ? 400 : 
+                      error.message.includes('401') || error.message.includes('403') ? 401 : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/openrouter/account/credits
+ * @desc Get OpenRouter account remaining credits using provided API key
+ * API key can be passed in Authorization header: Bearer <apiKey>
+ * If not provided, uses OPENROUTER_API_KEY from environment
+ */
+router.post('/openrouter/account/credits', async (req, res) => {
+  try {
+    const { includeRaw } = req.body;
+    
+    // Get API key from Authorization header (optional)
+    let apiKey = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      apiKey = authHeader.substring(7).trim(); // Remove "Bearer " prefix
+    }
+
+    const result = await getOpenRouterAccountCredits(apiKey || null, includeRaw || false);
+    res.json(result);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/openrouter/account/credits:', error);
+    const statusCode = error.message.includes('required') ? 400 : 
+                      error.message.includes('401') || error.message.includes('403') ? 401 : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route POST /api/tokens/purchase/validate
+ * @desc Validate if token purchase is allowed based on OpenRouter credits
+ * API key can be passed in Authorization header: Bearer <apiKey>
+ * If not provided, uses OPENROUTER_API_KEY from environment
+ */
+router.post('/purchase/validate', async (req, res) => {
+  try {
+    const { tokens } = req.body;
+
+    // Validation
+    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+      return res.status(400).json({
+        success: false,
+        canPurchase: false,
+        error: 'Valid positive integer tokens required',
+      });
+    }
+
+    // Get API key from Authorization header (optional)
+    let apiKey = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      apiKey = authHeader.substring(7).trim(); // Remove "Bearer " prefix
+    }
+
+    const result = await validateTokenPurchase(tokens, apiKey || null);
+    res.json(result);
+  } catch (error) {
+    console.error('Error in POST /api/tokens/purchase/validate:', error);
+    const statusCode = error.message.includes('required') ? 400 : 500;
+    res.status(statusCode).json({
+      success: false,
+      canPurchase: false,
       error: error.message,
     });
   }
