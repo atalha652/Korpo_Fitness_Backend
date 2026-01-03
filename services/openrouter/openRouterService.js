@@ -82,9 +82,6 @@ export async function fetchAccountCredits(apiKey = null) {
 
     const data = await response.json();
     
-    // Log response for debugging
-    console.log('OpenRouter Credits API Response:', JSON.stringify(data, null, 2));
-    
     // Try different possible response structures
     let credits = 0;
     
@@ -251,6 +248,254 @@ export async function createChatCompletion({
     };
   } catch (error) {
     console.error('Error creating chat completion:', error);
+    throw error;
+  }
+}
+
+/**
+ * Create a streaming chat completion request to OpenRouter
+ * Supports both audio and text input
+ * @param {Object} params - Request parameters
+ * @param {Array} params.messages - Array of message objects (can include audio)
+ * @param {string} params.model - Model identifier (default: google/gemini-3-flash-preview)
+ * @param {Object} params.options - Additional options (temperature, max_tokens, etc.)
+ * @param {Function} params.onChunk - Callback function for each chunk
+ * @returns {Promise<Object>} Final response with usage information
+ */
+export async function createStreamingChatCompletion({ 
+  messages, 
+  model = DEFAULT_MODEL, 
+  options = {},
+  onChunk = null
+}) {
+  try {
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      throw new Error('Messages array is required and must not be empty');
+    }
+
+    // Process messages to handle audio and text input
+    const processedMessages = messages.map(msg => {
+      // If message has audio (base64 encoded), convert it to the proper format
+      if (msg.audio) {
+        // For Gemini models via OpenRouter, audio can be included in content array
+        const contentArray = [];
+        
+        // Add audio if present
+        if (msg.audio) {
+          // Handle base64 audio - remove data URL prefix if present
+          let audioData = msg.audio;
+          if (audioData.startsWith('data:')) {
+            const base64Match = audioData.match(/data:([^;]+);base64,(.+)/);
+            if (base64Match) {
+              audioData = base64Match[2];
+            }
+          }
+          
+          contentArray.push({
+            type: 'input_audio',
+            data: audioData,
+            format: msg.audioFormat || 'wav',
+          });
+        }
+        
+        // Add text if present
+        if (msg.text) {
+          contentArray.push({
+            type: 'text',
+            text: msg.text,
+          });
+        }
+        
+        return {
+          role: msg.role || 'user',
+          content: contentArray,
+        };
+      }
+      
+      // If message has audio_url
+      if (msg.audio_url) {
+        const contentArray = [
+          {
+            type: 'input_audio',
+            data: msg.audio_url,
+          },
+        ];
+        
+        if (msg.text) {
+          contentArray.push({
+            type: 'text',
+            text: msg.text,
+          });
+        }
+        
+        return {
+          role: msg.role || 'user',
+          content: contentArray,
+        };
+      }
+      
+      // Regular text message - handle both string and array content
+      if (typeof msg.content === 'string') {
+        return {
+          role: msg.role,
+          content: msg.content,
+        };
+      }
+      
+      // If content is already an array (for multimodal)
+      if (Array.isArray(msg.content)) {
+        return {
+          role: msg.role,
+          content: msg.content,
+        };
+      }
+      
+      // Fallback
+      return {
+        role: msg.role,
+        content: msg.content || msg.text || '',
+      };
+    });
+
+    const requestBody = {
+      model,
+      messages: processedMessages,
+      stream: true,
+      ...options,
+    };
+
+    // Debug logging
+    const apiKey = getApiKey();
+    console.log('🔍 Debug: Making streaming request to OpenRouter');
+    console.log('🔍 Debug: Model:', model);
+    console.log('🔍 Debug: Messages count:', processedMessages.length);
+    console.log('🔍 Debug: API Key present:', !!apiKey);
+    console.log('🔍 Debug: API Key prefix:', apiKey ? apiKey.substring(0, 10) + '...' : 'N/A');
+
+    const url = `${OPENROUTER_API_URL}/chat/completions`;
+    console.log('🔍 Debug: Request URL:', url);
+    console.log('🔍 Debug: Request body keys:', Object.keys(requestBody));
+    
+    // Make the fetch request without timeout initially - let it connect
+    // The timeout will be handled by Node's default fetch timeout
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'http://localhost:5000',
+        'X-Title': process.env.APP_NAME || 'Korpo AI',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    console.log('✅ Debug: Got response, status:', response.status, response.statusText);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Debug: Response not OK:', response.status, errorText);
+      throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    console.log('✅ Debug: Starting to read stream...');
+
+    // Handle streaming response
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    let usage = null;
+    let responseId = null;
+    let responseModel = null;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          console.log('✅ Debug: Stream finished');
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.trim() === '') continue;
+          
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            
+            if (data === '[DONE]') {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              
+              // Extract response metadata (keep updating to get the latest)
+              if (parsed.id) responseId = parsed.id;
+              if (parsed.model) responseModel = parsed.model;
+              
+              // Extract usage information (usually in the last chunk)
+              if (parsed.usage) {
+                usage = parsed.usage;
+              }
+
+              // Extract content from choices
+              if (parsed.choices && parsed.choices.length > 0) {
+                const choice = parsed.choices[0];
+                const delta = choice.delta;
+                
+                if (delta && delta.content) {
+                  const content = delta.content;
+                  fullResponse += content;
+                  
+                  // Call onChunk callback if provided
+                  if (onChunk) {
+                    onChunk({
+                      content,
+                      fullContent: fullResponse,
+                      finishReason: choice.finish_reason,
+                      usage: parsed.usage || null,
+                    });
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('⚠️ Failed to parse SSE data:', e.message, 'Data:', data.substring(0, 100));
+            }
+          }
+        }
+      }
+
+      console.log('✅ Debug: Stream processing complete. Full response length:', fullResponse.length);
+
+      // Return final response with usage information
+      return {
+        success: true,
+        id: responseId,
+        model: responseModel || model,
+        content: fullResponse,
+        usage: usage ? {
+          promptTokens: usage.prompt_tokens || 0,
+          completionTokens: usage.completion_tokens || 0,
+          totalTokens: usage.total_tokens || 0,
+          promptTokensDetails: usage.prompt_tokens_details || {},
+          completionTokensDetails: usage.completion_tokens_details || {},
+        } : {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        },
+      };
+    } catch (streamError) {
+      console.error('❌ Debug: Stream reading error:', streamError);
+      throw streamError;
+    }
+  } catch (error) {
+    console.error('Error creating streaming chat completion:', error);
     throw error;
   }
 }

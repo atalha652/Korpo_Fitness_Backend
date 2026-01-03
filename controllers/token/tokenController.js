@@ -19,6 +19,8 @@ import {
 } from 'firebase/firestore';
 import { createChatCompletion, fetchUserCredits, fetchAccountCredits } from '../../services/openrouter/openRouterService.js';
 import { calculateInternalCost } from '../../utils/tokenPricing.js';
+import { deductFromWalletOnPurchase, updateWalletOnConsumption } from '../../services/openrouter/openrouterCreditsService.js';
+import { logTokenPurchase, logTokenConsumption } from '../../services/openrouter/userTokenHistoryService.js';
 
 /**
  * Get user's token balance
@@ -137,6 +139,24 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
       tokenHistory: tokenHistory.slice(-100), // Keep last 100 transactions
     });
 
+    // Log to token_purchasing_history if this is a purchase
+    if (source === 'purchase') {
+      try {
+        const tokenPrice = metadata.tokenPrice || (tokens / 1000000) * 1.30;
+        await logTokenPurchase(userId, tokens, tokenPrice, {
+          sessionId: metadata.sessionId,
+          transactionId: transactionRef.id,
+          paymentStatus: 'completed',
+        });
+
+        // Deduct from admin's openrouter credits
+        await deductFromWalletOnPurchase(tokens, tokenPrice);
+      } catch (error) {
+        console.error('⚠️ Error logging to token history or deducting from wallet:', error);
+        // Don't fail the purchase if history logging fails
+      }
+    }
+
     return {
       success: true,
       userId,
@@ -217,6 +237,20 @@ export async function deductTokensFromUser(userId, tokens, reason = 'usage', met
     await updateDoc(userRef, {
       tokenHistory: tokenHistory.slice(-100), // Keep last 100 transactions
     });
+
+    // Log consumption to token_purchasing_history
+    try {
+      await logTokenConsumption(userId, tokens, reason, {
+        transactionId: transactionRef.id,
+        ...metadata,
+      });
+
+      // Update admin's openrouter credits
+      await updateWalletOnConsumption(tokens);
+    } catch (error) {
+      console.error('⚠️ Error logging consumption or updating wallet:', error);
+      // Don't fail the deduction if logging fails
+    }
 
     return {
       success: true,

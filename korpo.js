@@ -24,8 +24,31 @@ import cron from "node-cron";
 import nodemailer from "nodemailer";
 import { Timestamp } from "firebase/firestore";
 import tokenRoutes from "./routes/token/tokenRoutes.js";
+import adminAuthRoutes from "./routes/admin/adminAuthRoutes.js";
+import adminDataRoutes from "./routes/admin/adminDataRoutes.js";
+import openrouterRoutes from "./routes/admin/openrouterRoutes.js";
+import userTokenHistoryRoutes from "./routes/token/userTokenHistoryRoutes.js";
+import { streamChatController } from "./controllers/openrouter/openrouterStreamController.js";
+import admin from 'firebase-admin';
 
 dotenv.config();
+
+// =============== FIREBASE ADMIN INITIALIZATION ===============
+try {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      }),
+    });
+    console.log('✅ Firebase Admin SDK initialized');
+  }
+} catch (error) {
+  console.warn('⚠️ Firebase Admin initialization:', error.message);
+}
+// =============== END FIREBASE ADMIN INITIALIZATION ===============
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY); // ✅ Read from env
 
@@ -35,7 +58,7 @@ app.use((req, res, next) => {
   if (req.originalUrl === "/webhook") {
     next();
   } else {
-    express.json()(req, res, next);
+    express.json({ limit: '50mb' })(req, res, next);
   }
 });
 // ✅ Enable CORS for all routes & origins
@@ -2990,10 +3013,28 @@ app.post("/api/subscription/admin/revoke", async (req, res) => {
 
 // =============== END SUBSCRIPTION SYSTEM ===============
 
+// =============== ADMIN SYSTEM ===============
+// Mount admin routes
+app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin/data', adminDataRoutes);
+app.use('/api/admin', openrouterRoutes);
+// =============== END ADMIN SYSTEM ===============
+
 // =============== TOKEN MANAGEMENT SYSTEM ===============
 // Mount token routes
 app.use('/api/tokens', tokenRoutes);
+app.use('/api', userTokenHistoryRoutes);
 // =============== END TOKEN MANAGEMENT SYSTEM ===============
+
+// =============== OPENROUTER STREAMING CHAT ===============
+/**
+ * POST /api/openrouter/chat/stream
+ * Streaming chat endpoint that supports both audio and text input
+ * Model: google/gemini-3-flash-preview
+ * Returns streaming response with input/output tokens
+ */
+app.post('/api/openrouter/chat/stream', streamChatController);
+// =============== END OPENROUTER STREAMING CHAT ===============
 
 // ------------------- Start Server -------------------
 const PORT = process.env.PORT || 5000;
