@@ -36,16 +36,22 @@ export async function createTokenPurchaseSession({
   cancelUrl,
 }) {
   try {
-    if (!userId || !tokens || tokens <= 0) {
-      throw new Error('Invalid parameters: userId and positive tokens required');
+    if (!userId) {
+      throw new Error('Invalid parameters: userId required');
     }
 
+    // TODO: Token validation commented out for platform fee-only payments
+    // if (!tokens || tokens <= 0) {
+    //   throw new Error('Invalid parameters: userId and positive tokens required');
+    // }
+
+    // TODO: Token quantity limit validation commented out for platform fee-only payments
     // Validate token quantity limits
-    const limits = getTokenLimits();
-    const { minTokens, maxTokens } = limits;
-    if (tokens < minTokens || tokens > maxTokens) {
-      throw new Error(`Token quantity must be between ${minTokens.toLocaleString()} and ${maxTokens.toLocaleString()}`);
-    }
+    // const limits = getTokenLimits();
+    // const { minTokens, maxTokens } = limits;
+    // if (tokens < minTokens || tokens > maxTokens) {
+    //   throw new Error(`Token quantity must be between ${minTokens.toLocaleString()} and ${maxTokens.toLocaleString()}`);
+    // }
 
     // Check if platform fee is required for this user
     const platformFeeStatus = await checkPlatformFeeRequired(userId);

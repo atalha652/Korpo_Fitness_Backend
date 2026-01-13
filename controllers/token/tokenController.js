@@ -70,9 +70,10 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
     if (!userId || typeof userId !== 'string' || userId.trim() === '') {
       throw new Error('Valid user ID is required');
     }
-    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
-      throw new Error('Valid positive integer tokens required');
-    }
+    // TODO: Token validation commented out for platform fee-only payments
+    // if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+    //   throw new Error('Valid positive integer tokens required');
+    // }
 
     const userRef = doc(db, 'users', userId);
     const userSnap = await getDoc(userRef);
@@ -84,11 +85,14 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
         console.log(`📝 Creating new user document for ${userId} during token purchase`);
         const newUserData = {
           tokenBalance: 0,
-          tokenHistory: [],
+          // TODO: tokenHistory commented out for platform fee-only payments
+          // tokenHistory: [],
           createdAt: serverTimestamp(),
         };
         await setDoc(userRef, newUserData);
-        userData = { tokenBalance: 0, tokenHistory: [] };
+        userData = { tokenBalance: 0 };
+        // TODO: tokenHistory commented out
+        // userData = { tokenBalance: 0, tokenHistory: [] };
       } else {
         throw new Error('User not found');
       }
@@ -112,50 +116,53 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
 
     await updateDoc(userRef, updateData);
 
+    // TODO: tokenTransactions commented out for platform fee-only payments
     // Record transaction
-    const transactionRef = await addDoc(collection(db, 'tokenTransactions'), {
-      userId,
-      type: 'credit',
-      amount: tokens,
-      previousBalance: currentBalance,
-      newBalance: newBalance,
-      source,
-      metadata,
-      timestamp: serverTimestamp(),
-    });
+    // const transactionRef = await addDoc(collection(db, 'tokenTransactions'), {
+    //   userId,
+    //   type: 'credit',
+    //   amount: tokens,
+    //   previousBalance: currentBalance,
+    //   newBalance: newBalance,
+    //   source,
+    //   metadata,
+    //   timestamp: serverTimestamp(),
+    // });
 
+    // TODO: tokenHistory commented out for platform fee-only payments
     // Update user's token history
-    const tokenHistory = userData.tokenHistory || [];
-    tokenHistory.push({
-      transactionId: transactionRef.id,
-      type: 'credit',
-      amount: tokens,
-      source,
-      timestamp: new Date(),
-      ...metadata,
-    });
+    // const tokenHistory = userData.tokenHistory || [];
+    // tokenHistory.push({
+    //   transactionId: transactionRef.id,
+    //   type: 'credit',
+    //   amount: tokens,
+    //   source,
+    //   timestamp: new Date(),
+    //   ...metadata,
+    // });
 
-    await updateDoc(userRef, {
-      tokenHistory: tokenHistory.slice(-100), // Keep last 100 transactions
-    });
+    // await updateDoc(userRef, {
+    //   tokenHistory: tokenHistory.slice(-100), // Keep last 100 transactions
+    // });
 
+    // TODO: tokenTransactions logging commented out for platform fee-only payments
     // Log to token_purchasing_history if this is a purchase
-    if (source === 'purchase') {
-      try {
-        const tokenPrice = metadata.tokenPrice || (tokens / 1000000) * 1.30;
-        await logTokenPurchase(userId, tokens, tokenPrice, {
-          sessionId: metadata.sessionId,
-          transactionId: transactionRef.id,
-          paymentStatus: 'completed',
-        });
-
-        // Deduct from admin's openrouter credits
-        await deductFromWalletOnPurchase(tokens, tokenPrice);
-      } catch (error) {
-        console.error('⚠️ Error logging to token history or deducting from wallet:', error);
-        // Don't fail the purchase if history logging fails
-      }
-    }
+    // if (source === 'purchase') {
+    //   try {
+    //     const tokenPrice = metadata.tokenPrice || (tokens / 1000000) * 1.30;
+    //     await logTokenPurchase(userId, tokens, tokenPrice, {
+    //       sessionId: metadata.sessionId,
+    //       transactionId: transactionRef.id,
+    //       paymentStatus: 'completed',
+    //     });
+    //
+    //     // Deduct from admin's openrouter credits
+    //     await deductFromWalletOnPurchase(tokens, tokenPrice);
+    //   } catch (error) {
+    //     console.error('⚠️ Error logging to token history or deducting from wallet:', error);
+    //     // Don't fail the purchase if history logging fails
+    //   }
+    // }
 
     return {
       success: true,
@@ -163,7 +170,8 @@ export async function addTokensToUser(userId, tokens, source = 'manual', metadat
       tokensAdded: tokens,
       previousBalance: currentBalance,
       newBalance: newBalance,
-      transactionId: transactionRef.id,
+      // TODO: transactionRef.id commented out for platform fee-only payments
+      // transactionId: transactionRef.id,
     };
   } catch (error) {
     console.error('Error adding tokens to user:', error);
@@ -185,9 +193,10 @@ export async function deductTokensFromUser(userId, tokens, reason = 'usage', met
     if (!userId || typeof userId !== 'string' || userId.trim() === '') {
       throw new Error('Valid user ID is required');
     }
-    if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
-      throw new Error('Valid positive integer tokens required');
-    }
+    // TODO: Token validation commented out for platform fee-only payments
+    // if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+    //   throw new Error('Valid positive integer tokens required');
+    // }
 
     const userRef = doc(db, 'users', userId);
     const userSnap = await getDoc(userRef);

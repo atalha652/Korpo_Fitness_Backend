@@ -103,12 +103,13 @@ router.post('/purchase/checkout', async (req, res) => {
             });
         }
 
-        if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Valid positive integer tokens required',
-            });
-        }
+        // TODO: Token validation commented out for platform fee-only payments
+        // if (!tokens || typeof tokens !== 'number' || tokens <= 0 || !Number.isInteger(tokens)) {
+        //     return res.status(400).json({
+        //         success: false,
+        //         error: 'Valid positive integer tokens required',
+        //     });
+        // }
 
         const session = await createTokenPurchaseSession({
             userId,

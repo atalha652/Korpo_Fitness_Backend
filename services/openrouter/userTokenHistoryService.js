@@ -29,9 +29,10 @@ export async function logTokenPurchase(userId, tokens, price, metadata = {}) {
       throw new Error('Valid user ID is required');
     }
 
-    if (!tokens || tokens <= 0 || !Number.isInteger(tokens)) {
-      throw new Error('Valid positive integer tokens required');
-    }
+    // TODO: Token validation commented out for platform fee-only payments
+    // if (!tokens || tokens <= 0 || !Number.isInteger(tokens)) {
+    //   throw new Error('Valid positive integer tokens required');
+    // }
 
     if (!price || price <= 0) {
       throw new Error('Valid price is required');
@@ -111,9 +112,10 @@ export async function logTokenConsumption(userId, tokens, reason = 'ai_service',
       throw new Error('Valid user ID is required');
     }
 
-    if (!tokens || tokens <= 0 || !Number.isInteger(tokens)) {
-      throw new Error('Valid positive integer tokens required');
-    }
+    // TODO: Token validation commented out for platform fee-only payments
+    // if (!tokens || tokens <= 0 || !Number.isInteger(tokens)) {
+    //   throw new Error('Valid positive integer tokens required');
+    // }
 
     // Get user's current data
     const userRef = doc(db, 'users', userId);
