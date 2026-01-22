@@ -25,51 +25,48 @@ const router = express.Router();
  * 
  * Body:
  * {
- *   prompt: "string",
- *   history: [{role, content}, ...],
- *   model: "gpt-4o" | "gpt-4o-mini",
- *   systemPrompt: "optional"
+ *   messages: [{role: "user/assistant/system", content: "..."}, ...],
+ *   model: "gpt-4o" | "gpt-4o-mini" (default: "gpt-4o-mini"),
+ *   temperature: 0.7 (optional, default: 0.7)
  * }
  * 
  * Response:
  * {
  *   success: true,
- *   choices: [{text: "..."}],
+ *   choices: [{text: "...", message: {role: "assistant", content: "..."}}],
  *   usage: {promptTokens, completionTokens, totalTokens},
+ *   plan: "free" | "premier",
  *   cost: 0.00045,
  *   remainingDaily: 49500,
- *   remainingMonthly: 999500
+ *   remainingMonthly: 999500,
+ *   totalCostUSD: 0.25
  * }
  */
 router.post('/chat', verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const { prompt, history = [], model = 'gpt-4o-mini', systemPrompt = '' } = req.body;
+    const { 
+      messages,
+      model = 'gpt-4o-mini',
+      temperature = 0.7
+    } = req.body;
 
     // ============ VALIDATION ============
-    if (!prompt || typeof prompt !== 'string') {
+    if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Valid prompt is required',
-        code: 'INVALID_PROMPT'
+        error: 'messages array is required and must not be empty',
+        code: 'INVALID_MESSAGES'
       });
     }
 
-    if (!Array.isArray(history)) {
-      return res.status(400).json({
-        success: false,
-        error: 'History must be an array',
-        code: 'INVALID_HISTORY'
-      });
-    }
-
-    // Validate history items have role and content
-    for (let i = 0; i < history.length; i++) {
-      if (!history[i].role || !history[i].content) {
+    // Validate each message has role and content
+    for (let i = 0; i < messages.length; i++) {
+      if (!messages[i].role || !messages[i].content) {
         return res.status(400).json({
           success: false,
-          error: `History item ${i} must have 'role' and 'content' fields`,
-          code: 'INVALID_HISTORY_FORMAT'
+          error: `Message ${i} must have 'role' and 'content' fields`,
+          code: 'INVALID_MESSAGE_FORMAT'
         });
       }
     }
@@ -86,20 +83,6 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
     }
 
     // ============ CALL OPENAI ============
-    const messages = [];
-    
-    // Add system prompt if provided
-    if (systemPrompt && systemPrompt.trim()) {
-      messages.push({ role: 'system', content: systemPrompt });
-    }
-    
-    // Add conversation history
-    messages.push(...history);
-    
-    // Add user prompt
-    messages.push({ role: 'user', content: prompt });
-
-    // Call OpenAI directly
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -109,7 +92,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
       body: JSON.stringify({
         model: model || 'gpt-4o-mini',
         messages: messages,
-        temperature: 0.7,
+        temperature: temperature || 0.7,
         max_tokens: 2000
       })
     });
@@ -131,7 +114,8 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
     
     const aiResponse = {
       choices: aiData.choices.map(choice => ({
-        text: choice.message.content
+        text: choice.message.content,
+        message: choice.message
       })),
       usage: {
         promptTokens,
@@ -203,8 +187,9 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  * 
  * Body: multipart/form-data
  * {
- *   file: <audio file (m4a, mp3, wav, etc)>,
- *   language: "en" (optional, ISO-639-1 code)
+ *   file: <audio file (m4a, mp3, wav, etc)> (required),
+ *   model: "whisper-1" (required),
+ *   language: "en" (optional, ISO-639-1 code, default: "en")
  * }
  * 
  * Response:
@@ -212,9 +197,12 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  *   success: true,
  *   text: "transcribed text",
  *   language: "en",
+ *   usage: {promptTokens, completionTokens, totalTokens},
+ *   plan: "free" | "premier",
  *   cost: 0.00025,
  *   remainingDaily: 49500,
- *   remainingMonthly: 999500
+ *   remainingMonthly: 999500,
+ *   totalCostUSD: 0.25
  * }
  */
 router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
@@ -253,6 +241,7 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
     }
 
     const file = req.file || req.files.file;
+    const model = req.body.model || 'whisper-1';
     const language = req.body.language || 'en';
 
     // ============ CALL OPENAI TRANSCRIPTION ============
@@ -264,7 +253,7 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
       filename: file.name || 'audio.m4a',
       contentType: file.mimetype || 'audio/m4a'
     });
-    formData.append('model', 'whisper-1');
+    formData.append('model', model || 'whisper-1');
     if (language) {
       formData.append('language', language);
     }
@@ -294,7 +283,13 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
     // ============ ESTIMATE TOKEN USAGE ============
     // Whisper charges per minute of audio, approximate tokens
     const estimatedTokens = Math.ceil(transcribedText.length / 4); // rough estimate
-    const cost = calculateTokenCost('gpt-4o-mini', Math.ceil(estimatedTokens * 0.5), Math.ceil(estimatedTokens * 0.5));
+    const promptTokens = Math.ceil(estimatedTokens * 0.5);
+    const completionTokens = Math.ceil(estimatedTokens * 0.5);
+    const totalTokens = promptTokens + completionTokens;
+    
+    const userPlan = userSnap.data().plan || 'free';
+    const isPremier = userPlan === 'premier';
+    const cost = isPremier ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -302,9 +297,9 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
       await recordTokenUsage(
         uid,
         {
-          model: 'whisper-1',
-          promptTokens: Math.ceil(estimatedTokens * 0.5),
-          completionTokens: Math.ceil(estimatedTokens * 0.5),
+          model: model || 'whisper-1',
+          promptTokens,
+          completionTokens,
           timestamp: new Date().toISOString()
         },
         userLimits.chatTokensDaily,
@@ -322,9 +317,16 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
       success: true,
       text: transcribedText,
       language: language,
+      usage: {
+        promptTokens,
+        completionTokens,
+        totalTokens
+      },
+      plan: userPlan,
       cost: cost,
       remainingDaily: usageSummary.remainingDaily,
-      remainingMonthly: usageSummary.remainingMonthly
+      remainingMonthly: usageSummary.remainingMonthly,
+      totalCostUSD: isPremier ? usageSummary.totalCostUSD : 0
     });
 
   } catch (error) {
@@ -499,6 +501,174 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
 
   } catch (error) {
     console.error('🔥 Error in POST /api/ai/speak:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+/**
+ * POST /api/ai/text-to-speech
+ * Text-to-speech endpoint for mobile app
+ * 
+ * Converts text to speech using OpenAI TTS API
+ * 
+ * Body:
+ * {
+ *   model: "tts-1" (required),
+ *   input: "string" (required, the text to convert),
+ *   voice: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer" (default: alloy),
+ *   speed: 0.25-4.0 (default: 1.0),
+ *   pitch: -0.1-0.2 (optional, affects tone)
+ * }
+ * 
+ * Response:
+ * {
+ *   success: true,
+ *   audio: "base64 encoded audio data",
+ *   mimeType: "audio/mpeg",
+ *   usage: {promptTokens, completionTokens, totalTokens},
+ *   plan: "free" | "premier",
+ *   cost: 0.00015,
+ *   remainingDaily: 49500,
+ *   remainingMonthly: 999500,
+ *   totalCostUSD: 0.25
+ * }
+ */
+router.post('/text-to-speech', verifyFirebaseToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const { 
+      model = 'tts-1', 
+      input, 
+      voice = 'alloy', 
+      speed = 1.0,
+      pitch = 0.0
+    } = req.body;
+
+    // ============ VALIDATION ============
+    if (!input || typeof input !== 'string' || input.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid input text is required',
+        code: 'INVALID_INPUT'
+      });
+    }
+
+    if (!model || typeof model !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid model is required',
+        code: 'INVALID_MODEL'
+      });
+    }
+
+    // ============ GET USER PLAN ============
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+    
+    if (!userSnap.exists()) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    const userPlan = userSnap.data().plan || 'free';
+    
+    if (userPlan !== 'premier') {
+      return res.status(403).json({
+        success: false,
+        error: 'TTS restricted to Premier users',
+        code: 'PREMIER_REQUIRED',
+        plan: userPlan
+      });
+    }
+
+    // ============ CALL OPENAI TTS ============
+    // Note: OpenAI TTS API doesn't support pitch parameter directly
+    // Pitch is handled by voice selection on frontend, we just pass through the input as-is
+    const ttsResponse = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: model || 'tts-1',
+        input: input.trim(),
+        voice: voice || 'alloy',
+        speed: Math.max(0.25, Math.min(4.0, parseFloat(speed) || 1.0)) // Clamp between 0.25 and 4.0
+      })
+    });
+
+    if (!ttsResponse.ok) {
+      const errorData = await ttsResponse.json();
+      console.error('OpenAI TTS Error:', errorData);
+      return res.status(500).json({
+        success: false,
+        error: errorData.error?.message || 'TTS request failed',
+        code: 'TTS_ERROR'
+      });
+    }
+
+    // ============ GET AUDIO DATA ============
+    const audioBuffer = await ttsResponse.arrayBuffer();
+    const audioBase64 = Buffer.from(audioBuffer).toString('base64');
+
+    // ============ GET USER LIMITS ============
+    const userLimits = await getUserLimits(uid);
+
+    // ============ ESTIMATE COST ============
+    // TTS costs ~$0.015 per 1K characters
+    const characterCount = input.length;
+    const estimatedTokens = Math.ceil(characterCount / 4);
+    const promptTokens = Math.ceil(estimatedTokens * 0.3);
+    const completionTokens = Math.ceil(estimatedTokens * 0.7);
+    const estimatedCost = (characterCount / 1000) * 0.015;
+
+    // ============ RECORD USAGE ============
+    try {
+      await recordTokenUsage(
+        uid,
+        {
+          model: model || 'tts-1',
+          promptTokens,
+          completionTokens,
+          timestamp: new Date().toISOString()
+        },
+        userLimits.chatTokensDaily,
+        userLimits.chatTokensMonthly
+      );
+    } catch (usageError) {
+      console.error('Failed to record usage:', usageError.message);
+    }
+
+    // ============ GET REMAINING ============
+    const usageSummary = await getUsageSummary(uid);
+
+    // ============ RESPONSE ============
+    res.json({
+      success: true,
+      audio: audioBase64,
+      mimeType: 'audio/mpeg',
+      usage: {
+        promptTokens,
+        completionTokens,
+        totalTokens: estimatedTokens
+      },
+      plan: userPlan,
+      cost: estimatedCost,
+      remainingDaily: usageSummary.remainingDaily,
+      remainingMonthly: usageSummary.remainingMonthly,
+      totalCostUSD: usageSummary.totalCostUSD
+    });
+
+  } catch (error) {
+    console.error('🔥 Error in POST /api/ai/text-to-speech:', error.message);
     res.status(500).json({
       success: false,
       error: error.message,
@@ -776,11 +946,13 @@ ${getExampleStructure()}`
  * POST /api/ai/extract-keywords
  * Extract keywords from text for voice memory feature
  * 
- * Uses OpenAI to extract 3-5 relevant keywords from provided text
+ * Uses OpenAI to extract relevant keywords from provided text
  * 
  * Body:
  * {
- *   text: "string" (required, the text to extract keywords from)
+ *   messages: [{role: "user/assistant/system", content: "..."}, ...],
+ *   model: "gpt-4o-mini" (default: "gpt-4o-mini"),
+ *   temperature: 0.3 (optional, default: 0.3)
  * }
  * 
  * Response:
@@ -799,15 +971,30 @@ ${getExampleStructure()}`
 router.post('/extract-keywords', verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const { text } = req.body;
+    const { 
+      messages,
+      model = 'gpt-4o-mini',
+      temperature = 0.3
+    } = req.body;
 
     // ============ VALIDATION ============
-    if (!text || typeof text !== 'string' || text.trim() === '') {
+    if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Valid text is required',
-        code: 'INVALID_TEXT'
+        error: 'messages array is required and must not be empty',
+        code: 'INVALID_MESSAGES'
       });
+    }
+
+    // Validate each message has role and content
+    for (let i = 0; i < messages.length; i++) {
+      if (!messages[i].role || !messages[i].content) {
+        return res.status(400).json({
+          success: false,
+          error: `Message ${i} must have 'role' and 'content' fields`,
+          code: 'INVALID_MESSAGE_FORMAT'
+        });
+      }
     }
 
     // ============ GET USER PLAN ============
@@ -832,18 +1019,9 @@ router.post('/extract-keywords', verifyFirebaseToken, async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a keyword extraction assistant. Extract 3–5 relevant keywords or topics from the provided text. Return ONLY a pure JSON array of strings, like ["keyword1", "keyword2"]. Do not include any extra text or markdown.'
-          },
-          {
-            role: 'user',
-            content: text
-          }
-        ],
-        temperature: 0.3,
+        model: model || 'gpt-4o-mini',
+        messages: messages,
+        temperature: temperature || 0.3,
         max_tokens: 200
       })
     });
