@@ -6,7 +6,6 @@
 
 import { db } from '../firebase.js';
 import { doc, getDoc } from 'firebase/firestore';
-import { INTERNAL_COSTS } from './tokenPricing.js';
 
 /**
  * Check if user needs to pay platform fee
@@ -91,9 +90,9 @@ export async function checkPlatformFeeRequired(userId) {
 
 /**
  * Get platform fee amount
- * @returns {number} Platform fee amount
+ * @returns {number} Platform fee amount in USD
  */
 export function getPlatformFee() {
-  return INTERNAL_COSTS.PLATFORM_FEE;
+  return 7.00; // $7 platform fee
 }
 

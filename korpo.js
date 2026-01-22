@@ -30,6 +30,11 @@ import openrouterRoutes from "./routes/admin/openrouterRoutes.js";
 import userTokenHistoryRoutes from "./routes/token/userTokenHistoryRoutes.js";
 import { streamChatController } from "./controllers/openrouter/openrouterStreamController.js";
 import admin from 'firebase-admin';
+import usageRoutes from "./routes/usage/usageRoutes.js";
+import billingRoutes from "./routes/billing/billingRoutes.js";
+import aiProxyRoutes from "./routes/ai/aiProxyRoutes.js";
+import { getPremierUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
+import { getPreviousMonth } from "./services/billingService.js";
 
 dotenv.config();
 
@@ -108,6 +113,102 @@ cron.schedule("0 0 25 * *", async () => {
     }
   });
 });
+
+// =============== ANNIVERSARY-BASED BILLING CRON JOB ===============
+// Runs daily at 00:00 UTC
+// Checks each user's billingAnniversaryDay and bills on their anniversary date
+// Example: If user paid on Jan 21, they get billed on 21st of every month
+cron.schedule("0 0 * * *", async () => {
+  console.log("💳 Starting anniversary-based billing process...");
+
+  try {
+    // Get premier users whose billing anniversary is TODAY
+    const usersToday = await getPremierUsersByAnniversary();
+    console.log(`📊 Found ${usersToday.length} premier users with anniversary today`);
+
+    if (usersToday.length === 0) {
+      console.log("✅ No users have anniversary today, skipping billing");
+      return;
+    }
+
+    const previousMonth = getPreviousMonth();
+    console.log(`📅 Processing invoices for month: ${previousMonth}`);
+
+    // Process each user with anniversary today
+    for (const user of usersToday) {
+      try {
+        // ✅ Step 1: Generate invoice (platform fee + API usage)
+        const invoice = await generateMonthlyInvoice(user.uid, previousMonth);
+        console.log(`✅ Generated invoice for ${user.uid}: $${invoice.totalAmount}`);
+
+        // ✅ Step 2: Send to Stripe for payment
+        if (user.stripeCustomerId) {
+          try {
+            await createStripeInvoice(user.uid, previousMonth);
+            console.log(`✅ Sent to Stripe for ${user.uid}`);
+          } catch (stripeError) {
+            console.error(`⚠️ Stripe error for ${user.uid}:`, stripeError.message);
+            // Continue with other users even if one Stripe call fails
+          }
+        } else {
+          console.warn(`⚠️ No Stripe customer ID for ${user.uid} - skipping Stripe invoice`);
+        }
+
+        // ✅ Step 3: Send email notification
+        if (user.email) {
+          await transporter.sendMail({
+            from: `"Korpo" <${process.env.EMAIL_USER}>`,
+            to: user.email,
+            subject: `💳 Your Korpo Invoice for ${previousMonth}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                <h2 style="color: #4CAF50;">Invoice for ${previousMonth}</h2>
+                <p>Hello ${user.name || "User"},</p>
+                <p>Your monthly invoice is ready:</p>
+                
+                <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                      <td style="padding: 8px;"><b>Platform Fee:</b></td>
+                      <td style="padding: 8px; text-align: right;">$${invoice.platformFee.toFixed(2)}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px;"><b>API Usage Cost:</b></td>
+                      <td style="padding: 8px; text-align: right;">$${invoice.apiUsageCost.toFixed(2)}</td>
+                    </tr>
+                    <tr style="border-top: 2px solid #ddd; font-weight: bold;">
+                      <td style="padding: 8px;"><b>Total Amount Due:</b></td>
+                      <td style="padding: 8px; text-align: right; color: #d32f2f;">$${invoice.totalAmount.toFixed(2)}</td>
+                    </tr>
+                  </table>
+                </div>
+
+                <p><b>Due Date:</b> ${invoice.dueDate.split('T')[0]}</p>
+                <p>Payment has been sent to Stripe. Please complete payment to avoid service interruption.</p>
+                
+                <p style="margin-top: 20px;">Thank you for using Korpo!</p>
+                <p><b>Korpo Team</b></p>
+                <hr>
+                <small style="color: #777;">This is an automated message. Please do not reply.</small>
+              </div>
+            `,
+          });
+          console.log(`📧 Sent invoice email to ${user.email}`);
+        }
+
+      } catch (userError) {
+        console.error(`❌ Failed to bill ${user.uid}:`, userError.message);
+        // Log error but continue with other users
+      }
+    }
+
+    console.log("✅ Anniversary-based billing process completed");
+
+  } catch (error) {
+    console.error("🔥 Anniversary billing job failed:", error.message);
+  }
+});
+// =============== END ANNIVERSARY BILLING ===============
 
 
 // ------------------- Test Endpoint -------------------
@@ -1941,6 +2042,58 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
       }
       break;
 
+    case "invoice.payment_succeeded":
+      {
+        console.log("✅ Invoice payment succeeded");
+        const invoice = event.data.object;
+        const uid = invoice.metadata?.uid;
+        const month = invoice.metadata?.month;
+
+        if (!uid || !month) {
+          console.warn("⚠️ Missing uid or month in invoice metadata");
+          break;
+        }
+
+        try {
+          const invoiceRef = doc(db, 'invoices', `${uid}_${month}`);
+          await updateDoc(invoiceRef, {
+            status: 'paid',
+            paidAt: new Date().toISOString(),
+            stripeInvoiceId: invoice.id
+          });
+          console.log(`✅ Firestore updated: Invoice marked as paid for ${uid} (${month})`);
+        } catch (error) {
+          console.error(`❌ Error updating invoice status: ${error.message}`);
+        }
+      }
+      break;
+
+    case "invoice.payment_failed":
+      {
+        console.log("❌ Invoice payment failed");
+        const invoice = event.data.object;
+        const uid = invoice.metadata?.uid;
+        const month = invoice.metadata?.month;
+
+        if (!uid || !month) {
+          console.warn("⚠️ Missing uid or month in invoice metadata");
+          break;
+        }
+
+        try {
+          const invoiceRef = doc(db, 'invoices', `${uid}_${month}`);
+          await updateDoc(invoiceRef, {
+            status: 'failed',
+            failedAt: new Date().toISOString(),
+            lastAttemptError: invoice.last_error?.message || 'Unknown error'
+          });
+          console.log(`❌ Firestore updated: Invoice marked as failed for ${uid} (${month})`);
+        } catch (error) {
+          console.error(`❌ Error updating invoice status: ${error.message}`);
+        }
+      }
+      break;
+
     default:
       console.log(`ℹ️ Unhandled event type ${event.type}`);
   }
@@ -3025,6 +3178,17 @@ app.use('/api/admin', openrouterRoutes);
 app.use('/api/tokens', tokenRoutes);
 app.use('/api', userTokenHistoryRoutes);
 // =============== END TOKEN MANAGEMENT SYSTEM ===============
+
+// =============== USAGE TRACKING & BILLING SYSTEM ===============
+// Mount usage and billing routes
+app.use('/api/usage', usageRoutes);
+app.use('/api/billing', billingRoutes);
+// =============== END USAGE TRACKING & BILLING SYSTEM ===============
+
+// =============== AI PROXY SYSTEM (Mobile App) ===============
+// Mount AI proxy routes - mobile app calls these instead of OpenAI directly
+app.use('/api/ai', aiProxyRoutes);
+// =============== END AI PROXY SYSTEM ===============
 
 // =============== OPENROUTER STREAMING CHAT ===============
 /**

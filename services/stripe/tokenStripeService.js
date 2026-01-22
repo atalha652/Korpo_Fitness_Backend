@@ -6,8 +6,8 @@
 
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
-import { calculateTokenPrice, validateTokenPrice, getTokenLimits } from '../../utils/tokenPricing.js';
-import { checkPlatformFeeRequired } from '../../utils/platformFeeHelper.js';
+import { calculateTokenCost } from '../../utils/tokenPricing.js';
+import { checkPlatformFeeRequired, getPlatformFee } from '../../utils/platformFeeHelper.js';
 
 dotenv.config();
 
@@ -58,33 +58,20 @@ export async function createTokenPurchaseSession({
     const platformFeeRequired = platformFeeStatus.required;
 
     // Backend recalculates price independently (mandatory validation)
-    const priceCalculation = calculateTokenPrice(tokens, platformFeeRequired);
+    // Simplified: tokens are free, only platform fee applies
+    const platformFeeAmount = platformFeeRequired ? getPlatformFee() : 0;
+    const totalPrice = platformFeeAmount;
 
     // Validate that provided price matches calculated total price
-    if (price !== undefined) {
-      const validation = validateTokenPrice(tokens, price, platformFeeRequired);
-      if (!validation.isValid) {
-        throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${priceCalculation.totalPrice.toFixed(2)}`);
-      }
+    if (price !== undefined && price !== totalPrice) {
+      throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${totalPrice.toFixed(2)}`);
     }
 
     // Build line items array
-    const lineItems = [
-      {
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'Korpo AI Tokens',
-            description: `Purchase ${tokens.toLocaleString()} tokens for AI services (covers text, audio & multimodal usage)`,
-          },
-          unit_amount: Math.round(priceCalculation.tokenPrice * 100), // Convert to cents
-        },
-        quantity: 1,
-      },
-    ];
+    const lineItems = [];
 
     // Add platform fee line item only if required
-    if (platformFeeRequired && priceCalculation.platformFee > 0) {
+    if (platformFeeRequired && platformFeeAmount > 0) {
       lineItems.push({
         price_data: {
           currency: 'usd',
@@ -92,7 +79,7 @@ export async function createTokenPurchaseSession({
             name: 'Platform Fee',
             description: 'Monthly platform access, infrastructure, and support',
           },
-          unit_amount: Math.round(priceCalculation.platformFee * 100), // Convert to cents
+          unit_amount: Math.round(platformFeeAmount * 100), // Convert to cents
         },
         quantity: 1,
       });
@@ -120,10 +107,9 @@ export async function createTokenPurchaseSession({
       sessionId: session.id,
       url: session.url,
       tokens,
-      tokenPrice: priceCalculation.tokenPrice,
-      platformFee: priceCalculation.platformFee,
+      platformFee: platformFeeAmount,
       platformFeeRequired,
-      totalPrice: priceCalculation.totalPrice,
+      totalPrice: totalPrice,
       platformFeeStatus: platformFeeStatus.reason,
     };
   } catch (error) {
@@ -151,26 +137,23 @@ export async function createTokenPaymentIntent({ userId, tokens, price }) {
     const platformFeeRequired = platformFeeStatus.required;
 
     // Backend recalculates price independently
-    const priceCalculation = calculateTokenPrice(tokens, platformFeeRequired);
+    const platformFeeAmount = platformFeeRequired ? getPlatformFee() : 0;
+    const totalPrice = platformFeeAmount;
 
     // Validate total price if provided
-    if (price !== undefined) {
-      const validation = validateTokenPrice(tokens, price, platformFeeRequired);
-      if (!validation.isValid) {
-        throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${priceCalculation.totalPrice.toFixed(2)}`);
-      }
+    if (price !== undefined && price !== totalPrice) {
+      throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${totalPrice.toFixed(2)}`);
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(priceCalculation.totalPrice * 100), // Convert to cents
+      amount: Math.round(totalPrice * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         userId,
         tokens: tokens.toString(),
-        tokenPrice: priceCalculation.tokenPrice.toString(),
-        platformFee: priceCalculation.platformFee.toString(),
+        platformFee: platformFeeAmount.toString(),
         platformFeeRequired: platformFeeRequired.toString(),
-        totalPrice: priceCalculation.totalPrice.toString(),
+        totalPrice: totalPrice.toString(),
         type: 'token_purchase',
       },
     });
@@ -180,10 +163,9 @@ export async function createTokenPaymentIntent({ userId, tokens, price }) {
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       tokens,
-      tokenPrice: priceCalculation.tokenPrice,
-      platformFee: priceCalculation.platformFee,
+      platformFee: platformFeeAmount,
       platformFeeRequired,
-      totalPrice: priceCalculation.totalPrice,
+      totalPrice: totalPrice,
       platformFeeStatus: platformFeeStatus.reason,
     };
   } catch (error) {

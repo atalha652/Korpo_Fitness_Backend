@@ -18,7 +18,7 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import { createChatCompletion, fetchUserCredits, fetchAccountCredits } from '../../services/openrouter/openRouterService.js';
-import { calculateInternalCost } from '../../utils/tokenPricing.js';
+import { calculateTokenCost } from '../../utils/tokenPricing.js';
 import { deductFromWalletOnPurchase, updateWalletOnConsumption } from '../../services/openrouter/openrouterCreditsService.js';
 import { logTokenPurchase, logTokenConsumption } from '../../services/openrouter/userTokenHistoryService.js';
 
@@ -306,12 +306,12 @@ export async function processAIServiceRequest(userId, requestParams) {
     const completionTokens = aiResponse.usage.completionTokens || 0;
 
     if (tokensUsed > 0) {
-      // Calculate internal cost for tracking
-      const internalCost = calculateInternalCost({
-        inputTokens: promptTokens,
-        outputTokens: completionTokens,
-        audioTokens: 0, // Audio tokens if available from OpenRouter
-      });
+      // Calculate token cost for tracking
+      const tokenCost = calculateTokenCost(
+        requestParams.model || 'gpt-4o-mini',
+        promptTokens,
+        completionTokens
+      );
 
       // Deduct tokens
       await deductTokensFromUser(userId, tokensUsed, 'ai_service', {
@@ -320,7 +320,7 @@ export async function processAIServiceRequest(userId, requestParams) {
         completionTokens,
         totalTokens: tokensUsed,
         requestId: aiResponse.id,
-        internalCost: internalCost.totalCost,
+        tokenCost: tokenCost,
       });
     }
 

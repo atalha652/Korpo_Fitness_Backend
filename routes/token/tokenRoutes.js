@@ -21,8 +21,9 @@ import {
     getCheckoutSession,
     verifyWebhookSignature,
 } from '../../services/stripe/tokenStripeService.js';
-import { calculateTokenPrice, getTokenLimits } from '../../utils/tokenPricing.js';
-import { checkPlatformFeeRequired } from '../../utils/platformFeeHelper.js';
+import { getPlatformFee } from '../../utils/platformFeeHelper.js';
+import { db } from '../../firebase.js';
+import { doc, getDoc } from 'firebase/firestore';
 import { checkUserBalance, requirePositiveBalance } from '../../middleware/balanceChecker.js';
 
 const router = express.Router();
@@ -51,10 +52,11 @@ router.get('/balance/:userId', async (req, res) => {
  */
 router.get('/pricing/limits', async (req, res) => {
     try {
-        const limits = getTokenLimits();
+        const platformFee = getPlatformFee();
         res.json({
             success: true,
-            ...limits,
+            platformFee: platformFee,
+            description: 'Platform fee for token purchases and premier plan'
         });
     } catch (error) {
         console.error('Error in GET /api/tokens/pricing/limits:', error);
