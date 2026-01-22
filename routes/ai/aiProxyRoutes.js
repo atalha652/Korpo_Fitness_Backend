@@ -188,7 +188,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  * Body: multipart/form-data
  * {
  *   file: <audio file (m4a, mp3, wav, etc)> (required),
- *   model: "whisper-1" (required),
+ *   model: "whisper-1" | "gpt-4o-mini-transcribe" (optional, maps to whisper-1),
  *   language: "en" (optional, ISO-639-1 code, default: "en")
  * }
  * 
@@ -209,24 +209,26 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
 
-    // Check if user is premier
+    // Get user info
     const userRef = doc(db, 'users', uid);
     const userSnap = await getDoc(userRef);
     
-    if (!userSnap.exists() || userSnap.data().plan !== 'premier') {
-      return res.status(403).json({
+    if (!userSnap.exists()) {
+      return res.status(404).json({
         success: false,
-        error: 'Transcription restricted to Premier users',
-        code: 'PREMIER_REQUIRED'
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
       });
     }
 
-    // Check limits
+    const userPlan = userSnap.data().plan || 'free';
+
+    // Check limits (applicable for all users)
     const canUse = await checkCanUseTokens(uid);
     if (!canUse.allowed) {
       return res.status(429).json({
         success: false,
-        error: 'Limit exceeded',
+        error: 'Token limit exceeded',
         code: 'LIMIT_EXCEEDED'
       });
     }
@@ -235,13 +237,20 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
     if (!req.file && !req.files?.file) {
       return res.status(400).json({
         success: false,
-        error: 'Audio file is required',
+        error: 'Audio file is required in multipart form data',
         code: 'MISSING_FILE'
       });
     }
 
     const file = req.file || req.files.file;
-    const model = req.body.model || 'whisper-1';
+    
+    // Model validation: Map common names to whisper-1
+    let model = req.body.model || 'whisper-1';
+    if (model === 'gpt-4o-mini-transcribe') {
+      console.log('📝 Mapping gpt-4o-mini-transcribe → whisper-1');
+      model = 'whisper-1';
+    }
+    
     const language = req.body.language || 'en';
 
     // ============ CALL OPENAI TRANSCRIPTION ============
@@ -281,15 +290,15 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
     const transcribedText = transcriptionData.text || '';
 
     // ============ ESTIMATE TOKEN USAGE ============
-    // Whisper charges per minute of audio, approximate tokens
-    const estimatedTokens = Math.ceil(transcribedText.length / 4); // rough estimate
+    // Whisper API charges per minute of audio, we estimate tokens from text length
+    const estimatedTokens = Math.ceil(transcribedText.length / 4); // rough estimate: ~4 chars per token
     const promptTokens = Math.ceil(estimatedTokens * 0.5);
     const completionTokens = Math.ceil(estimatedTokens * 0.5);
     const totalTokens = promptTokens + completionTokens;
     
-    const userPlan = userSnap.data().plan || 'free';
     const isPremier = userPlan === 'premier';
-    const cost = isPremier ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
+    // Calculate actual cost based on model used (whisper-1)
+    const cost = isPremier ? calculateTokenCost('whisper-1', promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -297,7 +306,7 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
       await recordTokenUsage(
         uid,
         {
-          model: model || 'whisper-1',
+          model: 'whisper-1', // Always record as whisper-1, regardless of input
           promptTokens,
           completionTokens,
           timestamp: new Date().toISOString()
@@ -306,7 +315,8 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
         userLimits.chatTokensMonthly
       );
     } catch (usageError) {
-      console.error('Failed to record usage:', usageError.message);
+      console.error('⚠️ Failed to record transcription usage:', usageError.message);
+      // Don't fail the request if recording fails
     }
 
     // ============ GET REMAINING ============
@@ -331,10 +341,12 @@ router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
 
   } catch (error) {
     console.error('🔥 Error in POST /api/ai/transcribe:', error.message);
+    console.error('Stack:', error.stack);
     res.status(500).json({
       success: false,
-      error: error.message,
-      code: 'INTERNAL_ERROR'
+      error: error.message || 'Transcription failed',
+      code: 'TRANSCRIPTION_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

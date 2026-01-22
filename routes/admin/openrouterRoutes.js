@@ -26,8 +26,9 @@ router.get('/openrouter/status', adminAuthMiddleware, checkPermission('tokens', 
  * @route POST /api/admin/openrouter/add-credits
  * @desc Add credits manually
  * @access Admin (write tokens)
+ * @disabled - Commented out for now
  */
-router.post('/openrouter/add-credits', adminAuthMiddleware, checkPermission('tokens', 'write'), addCreditsController);
+// router.post('/openrouter/add-credits', adminAuthMiddleware, checkPermission('tokens', 'write'), addCreditsController);
 
 /**
  * @route GET /api/admin/openrouter/transactions

@@ -27,6 +27,7 @@ import tokenRoutes from "./routes/token/tokenRoutes.js";
 import adminAuthRoutes from "./routes/admin/adminAuthRoutes.js";
 import adminDataRoutes from "./routes/admin/adminDataRoutes.js";
 import openrouterRoutes from "./routes/admin/openrouterRoutes.js";
+import adminStatsRoutes from "./routes/admin/adminStatsRoutes.js";
 import userTokenHistoryRoutes from "./routes/token/userTokenHistoryRoutes.js";
 import { streamChatController } from "./controllers/openrouter/openrouterStreamController.js";
 import admin from 'firebase-admin';
@@ -3171,6 +3172,7 @@ app.post("/api/subscription/admin/revoke", async (req, res) => {
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/admin/data', adminDataRoutes);
 app.use('/api/admin', openrouterRoutes);
+app.use('/api/admin/stats', adminStatsRoutes);
 // =============== END ADMIN SYSTEM ===============
 
 // =============== TOKEN MANAGEMENT SYSTEM ===============

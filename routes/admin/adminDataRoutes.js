@@ -115,44 +115,45 @@ router.get('/users/:userId', adminAuthMiddleware, checkPermission('users', 'read
  * @route GET /api/admin/data/subscriptions
  * @desc Get all subscriptions
  * @access Admin (read subscriptions)
+ * @disabled - Commented out for now
  */
-router.get('/subscriptions', adminAuthMiddleware, checkPermission('subscriptions', 'read'), async (req, res) => {
-  try {
-    const { pageSize = 50, pageNumber = 1 } = req.query;
-    const offset = (pageNumber - 1) * pageSize;
-
-    const usersSnapshot = await getDocs(collection(db, 'users'));
-
-    let subscriptions = usersSnapshot.docs
-      .map(docSnap => ({
-        userId: docSnap.id,
-        email: docSnap.data().email,
-        firstName: docSnap.data().firstName,
-        ...docSnap.data().subscription,
-      }))
-      .filter(s => s.subscription_end_date);
-
-    const total = subscriptions.length;
-    const paginatedSubscriptions = subscriptions.slice(offset, offset + pageSize);
-
-    res.json({
-      success: true,
-      subscriptions: paginatedSubscriptions,
-      pagination: {
-        total,
-        pageSize: parseInt(pageSize),
-        pageNumber: parseInt(pageNumber),
-        totalPages: Math.ceil(total / pageSize),
-      },
-    });
-  } catch (error) {
-    console.error('🔥 Error fetching subscriptions:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
+// router.get('/subscriptions', adminAuthMiddleware, checkPermission('subscriptions', 'read'), async (req, res) => {
+//   try {
+//     const { pageSize = 50, pageNumber = 1 } = req.query;
+//     const offset = (pageNumber - 1) * pageSize;
+//
+//     const usersSnapshot = await getDocs(collection(db, 'users'));
+//
+//     let subscriptions = usersSnapshot.docs
+//       .map(docSnap => ({
+//         userId: docSnap.id,
+//         email: docSnap.data().email,
+//         firstName: docSnap.data().firstName,
+//         ...docSnap.data().subscription,
+//       }))
+//       .filter(s => s.subscription_end_date);
+//
+//     const total = subscriptions.length;
+//     const paginatedSubscriptions = subscriptions.slice(offset, offset + pageSize);
+//
+//     res.json({
+//       success: true,
+//       subscriptions: paginatedSubscriptions,
+//       pagination: {
+//         total,
+//         pageSize: parseInt(pageSize),
+//         pageNumber: parseInt(pageNumber),
+//         totalPages: Math.ceil(total / pageSize),
+//       },
+//     });
+//   } catch (error) {
+//     console.error('🔥 Error fetching subscriptions:', error.message);
+//     res.status(500).json({
+//       success: false,
+//       error: error.message,
+//     });
+//   }
+// });
 
 /**
  * @route GET /api/admin/data/tokens/transactions
