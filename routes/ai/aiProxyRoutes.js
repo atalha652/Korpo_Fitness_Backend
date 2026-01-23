@@ -5,6 +5,7 @@
  */
 
 import express from 'express';
+import multer from 'multer';
 import { verifyFirebaseToken } from '../../middleware/firebaseAuthMiddleware.js';
 import { recordTokenUsage, checkCanUseTokens, getUsageSummary, getUserLimits } from '../../services/usageService.js';
 import { calculateTokenCost } from '../../utils/tokenPricing.js';
@@ -12,6 +13,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase.js';
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 /**
  * POST /api/ai/chat
@@ -205,7 +207,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  *   totalCostUSD: 0.25
  * }
  */
-router.post('/transcribe', verifyFirebaseToken, async (req, res) => {
+router.post('/transcribe', upload.single('file'), verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
 
