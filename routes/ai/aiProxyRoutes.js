@@ -272,8 +272,8 @@ router.post('/transcribe', upload.single('file'), verifyFirebaseToken, (err, req
     const fs = await import('fs');
     
     const formData = new FormData();
-    formData.append('file', file.data, {
-      filename: file.name || 'audio.m4a',
+    formData.append('file', file.buffer, {
+      filename: file.originalname || 'audio.m4a',
       contentType: file.mimetype || 'audio/m4a'
     });
     formData.append('model', model || 'whisper-1');
