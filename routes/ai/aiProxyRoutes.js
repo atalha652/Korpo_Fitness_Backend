@@ -207,7 +207,19 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  *   totalCostUSD: 0.25
  * }
  */
-router.post('/transcribe', upload.single('file'), verifyFirebaseToken, async (req, res) => {
+router.post('/transcribe', upload.single('file'), verifyFirebaseToken, (err, req, res, next) => {
+  // Handle multer errors first
+  if (err) {
+    console.error('Multer error:', err.message);
+    return res.status(400).json({
+      success: false,
+      error: 'Could not parse multipart form. Ensure Content-Type is "multipart/form-data"',
+      code: 'MULTIPART_ERROR',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+  next();
+}, async (req, res) => {
   try {
     const uid = req.user.uid;
 
@@ -236,15 +248,15 @@ router.post('/transcribe', upload.single('file'), verifyFirebaseToken, async (re
     }
 
     // Get the audio file from request
-    if (!req.file && !req.files?.file) {
+    if (!req.file) {
       return res.status(400).json({
         success: false,
-        error: 'Audio file is required in multipart form data',
+        error: 'Audio file is required - send as "file" field in multipart form data',
         code: 'MISSING_FILE'
       });
     }
 
-    const file = req.file || req.files.file;
+    const file = req.file;
     
     // Model validation: Map common names to whisper-1
     let model = req.body.model || 'whisper-1';
