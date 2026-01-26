@@ -207,19 +207,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  *   totalCostUSD: 0.25
  * }
  */
-router.post('/transcribe', upload.single('file'), verifyFirebaseToken, (err, req, res, next) => {
-  // Handle multer errors first
-  if (err) {
-    console.error('Multer error:', err.message);
-    return res.status(400).json({
-      success: false,
-      error: 'Could not parse multipart form. Ensure Content-Type is "multipart/form-data"',
-      code: 'MULTIPART_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-  }
-  next();
-}, async (req, res) => {
+router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (req, res) => {
   try {
     const uid = req.user.uid;
 
@@ -258,6 +246,13 @@ router.post('/transcribe', upload.single('file'), verifyFirebaseToken, (err, req
 
     const file = req.file;
     
+    console.log('📁 File received:', {
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+      fieldname: file.fieldname
+    });
+    
     // Model validation: Map common names to whisper-1
     let model = req.body.model || 'whisper-1';
     if (model === 'gpt-4o-mini-transcribe') {
@@ -268,29 +263,60 @@ router.post('/transcribe', upload.single('file'), verifyFirebaseToken, (err, req
     const language = req.body.language || 'en';
 
     // ============ CALL OPENAI TRANSCRIPTION ============
-    const FormData = (await import('form-data')).default;
-    const fs = await import('fs');
+    let openaiResponse;
+    let transcriptionData;
     
-    const formData = new FormData();
-    formData.append('file', file.buffer, {
-      filename: file.originalname || 'audio.m4a',
-      contentType: file.mimetype || 'audio/m4a'
-    });
-    formData.append('model', model || 'whisper-1');
-    if (language) {
-      formData.append('language', language);
+    try {
+      // Use native FormData (Node 18+) instead of form-data package
+      const formData = new FormData();
+      
+      // Create a Blob from the buffer
+      const blob = new Blob([file.buffer], { type: file.mimetype || 'audio/mp4' });
+      
+      // Append the blob as a file
+      formData.append('file', blob, file.originalname || 'audio.m4a');
+      formData.append('model', model || 'whisper-1');
+      
+      if (language && language !== 'auto') {
+        formData.append('language', language);
+      }
+
+      console.log('📤 Sending to OpenAI:', {
+        filename: file.originalname,
+        size: file.size,
+        mimetype: file.mimetype,
+        model: model || 'whisper-1',
+        language: language
+      });
+
+      openaiResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+          // Don't include Content-Type header - let fetch set it with boundary
+        },
+        body: formData
+      });
+
+      transcriptionData = await openaiResponse.json();
+
+    } catch (apiError) {
+      console.error('🔥 OpenAI API error:', apiError.message);
+      return res.status(500).json({
+        success: false,
+        error: apiError.message || 'Transcription failed',
+        code: 'TRANSCRIPTION_ERROR'
+      });
     }
 
-    const openaiResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        ...formData.getHeaders()
-      },
-      body: formData
-    });
-
-    const transcriptionData = await openaiResponse.json();
+    // Check if we have a valid response
+    if (!openaiResponse) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to get response from OpenAI',
+        code: 'TRANSCRIPTION_ERROR'
+      });
+    }
 
     if (!openaiResponse.ok) {
       console.error('OpenAI Transcription Error:', transcriptionData);
