@@ -338,15 +338,20 @@ export async function getUsageSummary(uid) {
     const dailyUsed = getDailyTokensUsed(uid, usage);
     const monthlyUsed = getMonthlyTokensUsed(uid, usage);
 
+    // Handle both document formats for month and lastReportedAt
+    const month = usage.month || usage.chatTokens?.month;
+    const lastReportedAt = usage.lastReportedAt || usage.chatTokens?.lastReportedAt;
+    const totalCostUSD = usage.totalCostUSD || usage.chatTokens?.totalCostUSD || 0;
+
     return {
       plan: userLimits.plan,
       dailyUsed,
       dailyLimit: userLimits.limits.chatTokensDaily,
       monthlyUsed,
       monthlyLimit: userLimits.limits.chatTokensMonthly,
-      totalCostUSD: usage.totalCostUSD || 0,
-      month: usage.month,
-      lastReportedAt: usage.lastReportedAt
+      totalCostUSD,
+      month,
+      lastReportedAt
     };
   } catch (error) {
     console.error('🔥 Error getting usage summary:', error.message);
