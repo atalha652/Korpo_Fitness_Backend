@@ -4,25 +4,25 @@
  */
 
 /**
- * Get current month in YYYY-MM format
+ * Get current month in YYYY-MM format (UTC)
  * @returns {string} Current month (e.g., "2025-01")
  */
 export function getCurrentMonth() {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
 }
 
 /**
- * Get today's date in YYYY-MM-DD format
+ * Get today's date in YYYY-MM-DD format (UTC)
  * @returns {string} Today's date (e.g., "2025-01-21")
  */
 export function getTodayDate() {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(now.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -47,15 +47,15 @@ export function isTimestampNewer(newTimestamp, lastTimestamp) {
 }
 
 /**
- * Extract month from ISO timestamp (YYYY-MM-DD or full ISO string)
+ * Extract month from ISO timestamp (YYYY-MM-DD or full ISO string) (UTC)
  * @param {string} isoTimestamp - ISO format timestamp
  * @returns {string} Month in YYYY-MM format
  */
 export function extractMonthFromTimestamp(isoTimestamp) {
   try {
     const date = new Date(isoTimestamp);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
   } catch (error) {
     return getCurrentMonth();

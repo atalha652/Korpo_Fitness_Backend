@@ -82,7 +82,7 @@ export async function getUserLimits(uid) {
 
 /**
  * Get current month's usage for a user
- * Creates document if it doesn't exist
+ * Handles both old format (just UID) and new format (UID_MONTH)
  * 
  * @param {string} uid - User ID
  * @returns {Promise<Object>} Usage record
@@ -90,15 +90,31 @@ export async function getUserLimits(uid) {
 export async function getMonthlyUsage(uid) {
   try {
     const month = getCurrentMonth();
-    const docId = `${uid}_${month}`;
-    const usageRef = doc(db, 'usage', docId);
-    const usageSnap = await getDoc(usageRef);
+    
+    // Try new format first: uid_month
+    const newFormatDocId = `${uid}_${month}`;
+    let usageRef = doc(db, 'usage', newFormatDocId);
+    let usageSnap = await getDoc(usageRef);
 
     if (usageSnap.exists()) {
       return usageSnap.data();
     }
 
-    // Create new usage document for this month
+    // Try old format: just uid
+    usageRef = doc(db, 'usage', uid);
+    usageSnap = await getDoc(usageRef);
+
+    if (usageSnap.exists()) {
+      const data = usageSnap.data();
+      
+      // Check if this document is for the current month
+      const docMonth = data.month || data.chatTokens?.month;
+      if (docMonth === month) {
+        return data;
+      }
+    }
+
+    // Neither format found or wrong month - return empty structure
     const newUsage = {
       uid,
       month,
@@ -289,12 +305,17 @@ export async function recordTokenUsage(uid, data, dailyLimit, monthlyLimit) {
 
     console.log(`✅ Recorded usage for ${uid}: +${totalTokens} tokens, $${costUSD}`);
 
+    // Verify the data was actually written by re-reading it
+    const verifyUsage = await getMonthlyUsage(uid);
+    const verifyDailyUsed = getDailyTokensUsed(uid, verifyUsage);
+    const verifyMonthlyUsed = getMonthlyTokensUsed(uid, verifyUsage);
+
     return {
       success: true,
       tokensAdded: totalTokens,
       costAdded: costUSD,
-      newDailyTotal: dailyUsed + totalTokens,
-      newMonthlyTotal: monthlyUsed + totalTokens
+      newDailyTotal: verifyDailyUsed,
+      newMonthlyTotal: verifyMonthlyUsed
     };
 
   } catch (error) {
