@@ -29,9 +29,9 @@ const router = express.Router();
  * {
  *   plan: "free" | "premier",
  *   dailyUsed: 1250,
- *   dailyLimit: 50000,
+ *   dailyLimit: 1000000,
  *   monthlyUsed: 15000,
- *   monthlyLimit: 1000000,
+ *   monthlyLimit: 30000000,
  *   totalCostUSD: 45.32,
  *   month: "2025-01",
  *   lastReportedAt: "2025-01-21T10:30:00Z"
@@ -69,14 +69,22 @@ router.get('/summary', verifyFirebaseToken, async (req, res) => {
  * GET /usage/can-use
  * 
  * Checks if user can still use tokens (before making API call)
+ * Uses hardcoded limits and checks against usage collection by uid
  * 
  * Response:
  * {
- *   allowed: true,
- *   remainingDailyTokens: 48750,
- *   remainingMonthlyTokens: 985000,
- *   dailyUsed: 1250,
- *   monthlyUsed: 15000
+ *   success: true,
+ *   data: {
+ *     allowed: true,
+ *     remainingDailyTokens: 998750,
+ *     remainingMonthlyTokens: 29985000,
+ *     dailyUsed: 1250,
+ *     monthlyUsed: 15000,
+ *     dailyLimit: 1000000,
+ *     monthlyLimit: 30000000,
+ *     plan: "free",
+ *     reason: null // Only present if not allowed
+ *   }
  * }
  */
 router.get('/can-use', verifyFirebaseToken, async (req, res) => {

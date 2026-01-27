@@ -1,7 +1,7 @@
 /**
  * Platform Fee Helper
  * Handles monthly platform fee logic
- * $7 platform fee is charged once per month per user
+ * $7 platform fee is charged once per month on billing anniversary
  */
 
 import { db } from '../firebase.js';
@@ -9,7 +9,7 @@ import { doc, getDoc } from 'firebase/firestore';
 
 /**
  * Check if user needs to pay platform fee
- * Platform fee is charged once per month
+ * Platform fee is charged once per month on billing anniversary
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Platform fee status
  */
@@ -33,13 +33,23 @@ export async function checkPlatformFeeRequired(userId) {
     }
 
     const userData = userSnap.data();
-    const lastPlatformFeeDate = userData.lastPlatformFeePaymentDate;
+    
+    // If user is not premier, no platform fee required
+    if (userData.plan !== 'premier') {
+      return {
+        required: false,
+        reason: 'Free plan user - no platform fee required',
+      };
+    }
 
-    // If never paid platform fee, it's required
+    const lastPlatformFeeDate = userData.lastPlatformFeePaymentDate;
+    const billingAnniversaryDay = userData.billingAnniversaryDay;
+
+    // If never paid platform fee, it's required (first time upgrade)
     if (!lastPlatformFeeDate) {
       return {
         required: true,
-        reason: 'First purchase - platform fee required',
+        reason: 'First upgrade - platform fee required',
         lastPaymentDate: null,
       };
     }
@@ -51,29 +61,45 @@ export async function checkPlatformFeeRequired(userId) {
 
     // Get current date
     const now = new Date();
+    const today = now.getDate(); // Day of month (1-31)
 
-    // Check if last payment was in the same month and year
+    // If no billing anniversary day is set, use the day they last paid
+    const anniversaryDay = billingAnniversaryDay || lastPaymentDate.getDate();
+
+    // Check if today is the billing anniversary day
+    if (today !== anniversaryDay) {
+      return {
+        required: false,
+        reason: `Not billing anniversary day (anniversary: ${anniversaryDay}, today: ${today})`,
+        lastPaymentDate: lastPaymentDate,
+        billingAnniversaryDay: anniversaryDay,
+        nextBillingDate: getNextBillingDate(anniversaryDay)
+      };
+    }
+
+    // Check if already paid this month (same month and year)
     const lastPaymentMonth = lastPaymentDate.getMonth();
     const lastPaymentYear = lastPaymentDate.getFullYear();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
 
-    // Same month and year = no platform fee needed
+    // Same month and year = already paid this month
     if (lastPaymentYear === currentYear && lastPaymentMonth === currentMonth) {
       return {
         required: false,
         reason: 'Platform fee already paid this month',
         lastPaymentDate: lastPaymentDate,
-        currentMonth: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`,
-        lastPaymentMonth: `${lastPaymentYear}-${String(lastPaymentMonth + 1).padStart(2, '0')}`,
+        billingAnniversaryDay: anniversaryDay,
+        nextBillingDate: getNextBillingDate(anniversaryDay)
       };
     }
 
-    // Different month = platform fee required
+    // Different month and it's anniversary day = platform fee required
     return {
       required: true,
-      reason: 'New month - platform fee required',
+      reason: `Billing anniversary day - platform fee required (day ${anniversaryDay})`,
       lastPaymentDate: lastPaymentDate,
+      billingAnniversaryDay: anniversaryDay,
       currentMonth: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`,
       lastPaymentMonth: `${lastPaymentYear}-${String(lastPaymentMonth + 1).padStart(2, '0')}`,
     };
@@ -86,6 +112,23 @@ export async function checkPlatformFeeRequired(userId) {
       error: error.message,
     };
   }
+}
+
+/**
+ * Get next billing date based on anniversary day
+ * @param {number} anniversaryDay - Day of month (1-31)
+ * @returns {string} Next billing date in ISO format
+ */
+function getNextBillingDate(anniversaryDay) {
+  const now = new Date();
+  const nextBilling = new Date(now.getFullYear(), now.getMonth() + 1, anniversaryDay);
+  
+  // If the anniversary day doesn't exist in next month (e.g., Feb 31), use last day of month
+  if (nextBilling.getDate() !== anniversaryDay) {
+    nextBilling.setDate(0); // Set to last day of previous month
+  }
+  
+  return nextBilling.toISOString();
 }
 
 /**

@@ -140,6 +140,13 @@ cron.schedule("0 0 * * *", async () => {
       try {
         // ✅ Step 1: Generate invoice (platform fee + API usage)
         const invoice = await generateMonthlyInvoice(user.uid, previousMonth);
+        
+        // Check if invoice was skipped (first month)
+        if (invoice.status === 'first_month_skipped') {
+          console.log(`⏭️ Skipped first month for ${user.uid}: ${invoice.message}`);
+          continue; // Skip to next user
+        }
+        
         console.log(`✅ Generated invoice for ${user.uid}: $${invoice.totalAmount}`);
 
         // ✅ Step 2: Send to Stripe for payment

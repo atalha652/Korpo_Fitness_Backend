@@ -26,12 +26,27 @@ import {
   isTimestampNewer,
   extractMonthFromTimestamp
 } from '../utils/usageHelpers.js';
+import { getLimitsForPlan } from '../utils/limitsConfig.js';
+
+// ============ HARDCODED LIMITS ============
+// Update these values as needed for your business requirements
+// NOTE: These are now managed in utils/limitsConfig.js for centralized control
+
+/**
+ * Get hardcoded limits based on user plan
+ * @param {string} plan - User plan ('free' or 'premier')
+ * @returns {Object} Limits object with daily and monthly token limits
+ */
+export function getHardcodedLimits(plan = 'free') {
+  return getLimitsForPlan(plan);
+}
 
 /**
  * Get user's current plan and token limits
+ * Now uses hardcoded limits instead of database-stored limits
  * 
  * @param {string} uid - User ID from Firebase
- * @returns {Promise<Object>} User data with plan and limits
+ * @returns {Promise<Object>} User data with plan and hardcoded limits
  * @throws {Error} If user not found
  */
 export async function getUserLimits(uid) {
@@ -44,14 +59,18 @@ export async function getUserLimits(uid) {
     }
 
     const user = userSnap.data();
+    const userPlan = user.plan || 'free';
+    
+    // Get hardcoded limits based on user plan
+    const hardcodedLimits = getHardcodedLimits(userPlan);
 
-    // Return user plan and limits
+    // Return user plan and hardcoded limits
     return {
       uid,
-      plan: user.plan || 'free',
-      limits: user.limits || {
-        chatTokensDaily: 50000,
-        chatTokensMonthly: 1000000
+      plan: userPlan,
+      limits: {
+        chatTokensDaily: hardcodedLimits.chatTokensDaily,
+        chatTokensMonthly: hardcodedLimits.chatTokensMonthly
       },
       stripeCustomerId: user.stripeCustomerId || null
     };
@@ -316,30 +335,51 @@ export async function getUsageSummary(uid) {
 
 /**
  * Check if user can use tokens (for GET /usage/can-use endpoint)
+ * Uses hardcoded limits and checks against usage collection by uid
  * 
  * @param {string} uid - User ID
- * @returns {Promise<Object>} { allowed: boolean, remainingDaily: number }
+ * @returns {Promise<Object>} { allowed: boolean, remainingDaily: number, reason?: string }
  */
 export async function checkCanUseTokens(uid) {
   try {
+    // Get user plan and hardcoded limits
     const userLimits = await getUserLimits(uid);
+    const { chatTokensDaily, chatTokensMonthly } = userLimits.limits;
+    
+    // Get current usage from usage collection
     const usage = await getMonthlyUsage(uid);
-
+    
+    // Calculate current usage
     const dailyUsed = getDailyTokensUsed(uid, usage);
     const monthlyUsed = getMonthlyTokensUsed(uid, usage);
 
-    const { chatTokensDaily, chatTokensMonthly } = userLimits.limits;
-
+    // Check limits
     const dailyAllowed = dailyUsed < chatTokensDaily;
     const monthlyAllowed = monthlyUsed < chatTokensMonthly;
     const canUse = dailyAllowed && monthlyAllowed;
+
+    // Determine reason if not allowed
+    let reason = null;
+    if (!canUse) {
+      if (!dailyAllowed) {
+        reason = `Daily limit exceeded (${dailyUsed}/${chatTokensDaily} tokens used)`;
+      } else if (!monthlyAllowed) {
+        reason = `Monthly limit exceeded (${monthlyUsed}/${chatTokensMonthly} tokens used)`;
+      }
+    }
+
+    console.log(`🔍 Can-use check for ${uid} (${userLimits.plan}): ${canUse ? 'ALLOWED' : 'BLOCKED'} - Daily: ${dailyUsed}/${chatTokensDaily}, Monthly: ${monthlyUsed}/${chatTokensMonthly}`);
 
     return {
       allowed: canUse,
       remainingDailyTokens: Math.max(0, chatTokensDaily - dailyUsed),
       remainingMonthlyTokens: Math.max(0, chatTokensMonthly - monthlyUsed),
       dailyUsed,
-      monthlyUsed
+      monthlyUsed,
+      dailyLimit: chatTokensDaily,
+      monthlyLimit: chatTokensMonthly,
+      plan: userLimits.plan,
+      reason: reason
     };
   } catch (error) {
     console.error('🔥 Error checking can use tokens:', error.message);
