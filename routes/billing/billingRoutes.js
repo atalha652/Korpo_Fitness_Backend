@@ -13,7 +13,7 @@ import { getLimitsForPlan } from '../../utils/limitsConfig.js';
 import {
   createUpgradeCheckout,
   generateMonthlyInvoice,
-  upgradeTopremium
+  upgradeToPremium
 } from '../../services/billingService.js';
 
 const router = express.Router();
@@ -118,7 +118,7 @@ router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
       chatTokensMonthly: premiumLimitsConfig.chatTokensMonthly
     };
 
-    await upgradeTopremium(uid, premiumLimits);
+    await upgradeToPremium(uid, premiumLimits);
 
     res.json({
       success: true,
