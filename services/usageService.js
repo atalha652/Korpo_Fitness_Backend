@@ -180,7 +180,15 @@ export function getMonthlyTokensUsed(uid, usage) {
  */
 export function getDailyVoiceRequestsUsed(uid, usage) {
   const today = getTodayDate();
-  return usage.requests?.voice?.daily?.[today] || 0;
+  // Check new format first (top-level requests)
+  if (usage.requests?.voice?.daily?.[today]) {
+    return usage.requests.voice.daily[today];
+  }
+  // Check old format (nested under chatTokens)
+  if (usage.chatTokens?.requests?.voice?.daily?.[today]) {
+    return usage.chatTokens.requests.voice.daily[today];
+  }
+  return 0;
 }
 
 /**
@@ -192,7 +200,15 @@ export function getDailyVoiceRequestsUsed(uid, usage) {
  */
 export function getDailyChatRequestsUsed(uid, usage) {
   const today = getTodayDate();
-  return usage.requests?.chat?.daily?.[today] || 0;
+  // Check new format first (top-level requests)
+  if (usage.requests?.chat?.daily?.[today]) {
+    return usage.requests.chat.daily[today];
+  }
+  // Check old format (nested under chatTokens)
+  if (usage.chatTokens?.requests?.chat?.daily?.[today]) {
+    return usage.chatTokens.requests.chat.daily[today];
+  }
+  return 0;
 }
 
 /**
@@ -203,7 +219,15 @@ export function getDailyChatRequestsUsed(uid, usage) {
  * @returns {number} Voice requests used this month
  */
 export function getMonthlyVoiceRequestsUsed(uid, usage) {
-  return usage.requests?.voice?.monthly || 0;
+  // Check new format first (top-level requests)
+  if (usage.requests?.voice?.monthly) {
+    return usage.requests.voice.monthly;
+  }
+  // Check old format (nested under chatTokens)
+  if (usage.chatTokens?.requests?.voice?.monthly) {
+    return usage.chatTokens.requests.voice.monthly;
+  }
+  return 0;
 }
 
 /**
@@ -214,7 +238,15 @@ export function getMonthlyVoiceRequestsUsed(uid, usage) {
  * @returns {number} Chat requests used this month
  */
 export function getMonthlyChatRequestsUsed(uid, usage) {
-  return usage.requests?.chat?.monthly || 0;
+  // Check new format first (top-level requests)
+  if (usage.requests?.chat?.monthly) {
+    return usage.requests.chat.monthly;
+  }
+  // Check old format (nested under chatTokens)
+  if (usage.chatTokens?.requests?.chat?.monthly) {
+    return usage.chatTokens.requests.chat.monthly;
+  }
+  return 0;
 }
 
 /**
@@ -475,16 +507,48 @@ export async function checkCanUseTokens(uid) {
     const dailyVoiceRequestsAllowed = dailyVoiceRequestsUsed < voiceRequestsDaily;
     const dailyChatRequestsAllowed = dailyChatRequestsUsed < chatRequestsDaily;
 
-    const canUse = dailyTokensAllowed && monthlyTokensAllowed && 
-                   dailyVoiceRequestsAllowed && dailyChatRequestsAllowed;
+    // Separate permissions for voice and chat features
+    const allowedVoice = dailyTokensAllowed && monthlyTokensAllowed && dailyVoiceRequestsAllowed;
+    const allowedChat = dailyTokensAllowed && monthlyTokensAllowed && dailyChatRequestsAllowed;
+    
+    // Overall allowed (for backward compatibility)
+    const canUse = allowedVoice && allowedChat;
 
-    // Determine reason if not allowed
+    // Determine reasons for blocking
     let reason = null;
+    let voiceBlockedReason = null;
+    let chatBlockedReason = null;
+    
+    // Check what's blocking voice
+    if (!allowedVoice) {
+      if (!dailyTokensAllowed) {
+        voiceBlockedReason = `Daily token limit exceeded (${dailyTokensUsed}/${chatTokensDaily} tokens used)`;
+      } else if (!monthlyTokensAllowed) {
+        voiceBlockedReason = `Monthly token limit exceeded (${monthlyTokensUsed}/${chatTokensMonthly} tokens used)`;
+      } else if (!dailyVoiceRequestsAllowed) {
+        voiceBlockedReason = `Daily voice request limit exceeded (${dailyVoiceRequestsUsed}/${voiceRequestsDaily} requests used)`;
+      }
+    }
+    
+    // Check what's blocking chat
+    if (!allowedChat) {
+      if (!dailyTokensAllowed) {
+        chatBlockedReason = `Daily token limit exceeded (${dailyTokensUsed}/${chatTokensDaily} tokens used)`;
+      } else if (!monthlyTokensAllowed) {
+        chatBlockedReason = `Monthly token limit exceeded (${monthlyTokensUsed}/${chatTokensMonthly} tokens used)`;
+      } else if (!dailyChatRequestsAllowed) {
+        chatBlockedReason = `Daily chat request limit exceeded (${dailyChatRequestsUsed}/${chatRequestsDaily} requests used)`;
+      }
+    }
+    
+    // Set overall reason (prioritize the most restrictive)
     if (!canUse) {
       if (!dailyTokensAllowed) {
         reason = `Daily token limit exceeded (${dailyTokensUsed}/${chatTokensDaily} tokens used)`;
       } else if (!monthlyTokensAllowed) {
         reason = `Monthly token limit exceeded (${monthlyTokensUsed}/${chatTokensMonthly} tokens used)`;
+      } else if (!dailyVoiceRequestsAllowed && !dailyChatRequestsAllowed) {
+        reason = `Both voice and chat request limits exceeded`;
       } else if (!dailyVoiceRequestsAllowed) {
         reason = `Daily voice request limit exceeded (${dailyVoiceRequestsUsed}/${voiceRequestsDaily} requests used)`;
       } else if (!dailyChatRequestsAllowed) {
@@ -492,13 +556,14 @@ export async function checkCanUseTokens(uid) {
       }
     }
 
-    console.log(`🔍 Can-use check for ${uid} (${userLimits.plan}): ${canUse ? 'ALLOWED' : 'BLOCKED'} - Tokens: ${dailyTokensUsed}/${chatTokensDaily}, Voice: ${dailyVoiceRequestsUsed}/${voiceRequestsDaily}, Chat: ${dailyChatRequestsUsed}/${chatRequestsDaily}`);
+    console.log(`🔍 Can-use check for ${uid} (${userLimits.plan}): Voice=${allowedVoice ? 'ALLOWED' : 'BLOCKED'}, Chat=${allowedChat ? 'ALLOWED' : 'BLOCKED'} - Tokens: ${dailyTokensUsed}/${chatTokensDaily}, Voice: ${dailyVoiceRequestsUsed}/${voiceRequestsDaily}, Chat: ${dailyChatRequestsUsed}/${chatRequestsDaily}`);
 
     // Get time until next reset
     const resetInfo = getTimeUntilReset();
 
     return {
-      allowed: canUse,
+      allowedVoice,    // Can user use voice features?
+      allowedChat,     // Can user use chat features?
       // Token limits
       remainingDailyTokens: Math.max(0, chatTokensDaily - dailyTokensUsed),
       remainingMonthlyTokens: Math.max(0, chatTokensMonthly - monthlyTokensUsed),
@@ -523,7 +588,9 @@ export async function checkCanUseTokens(uid) {
       },
       // General
       plan: userLimits.plan,
-      reason: reason
+      reason: reason,
+      voiceBlockedReason,  // NEW: Specific reason why voice is blocked (null if allowed)
+      chatBlockedReason    // NEW: Specific reason why chat is blocked (null if allowed)
     };
   } catch (error) {
     console.error('🔥 Error checking can use tokens:', error.message);
