@@ -31,7 +31,7 @@ const transporter = nodemailer.createTransport({
 // Initialize Stripe with API key
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Platform fee for premier users
+// Platform fee for premium users
 const PLATFORM_FEE = 7.00;
 
 /**
@@ -103,7 +103,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
           price_data: {
             currency: 'usd',
             product_data: {
-              name: 'Korpo Premier Plan',
+              name: 'Korpo premium Plan',
               description: 'Unlimited access to AI features'
             },
             unit_amount: Math.round(PLATFORM_FEE * 100) // Convert to cents
@@ -115,7 +115,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
       cancel_url: cancelUrl,
       metadata: {
         uid: uid,
-        planType: 'premier',
+        planType: 'premium',
         upgradeDate: new Date().toISOString()
       }
     });
@@ -130,7 +130,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
 }
 
 /**
- * Generate monthly invoice for premier user
+ * Generate monthly invoice for premium user
  * BILLING LOGIC:
  * - User pays platform fee on upgrade (e.g., Jan 27)
  * - First invoice: One month later (e.g., Feb 27) with platform fee + API usage from previous month
@@ -155,8 +155,8 @@ export async function generateMonthlyInvoice(uid, month = null) {
 
     const user = userSnap.data();
 
-    // Only premier users get charged
-    if (user.plan !== 'premier') {
+    // Only premium users get charged
+    if (user.plan !== 'premium') {
       return {
         uid,
         month: invoiceMonth,
@@ -223,7 +223,7 @@ export async function generateMonthlyInvoice(uid, month = null) {
               
               <p>Hi ${user.name || 'there'},</p>
               
-              <p>Your monthly invoice for Korpo Premier is ready.</p>
+              <p>Your monthly invoice for Korpo premium is ready.</p>
               
               <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
                 <h3 style="margin-top: 0;">Invoice Details</h3>
@@ -421,15 +421,15 @@ async function isFirstMonthAfterUpgrade(uid, upgradedAt, invoiceMonth) {
 }
 
 /**
- * Get all premier users that need billing
+ * Get all premium users that need billing
  * (For cron job to run monthly billing)
  * 
- * @returns {Promise<Array>} List of premier users
+ * @returns {Promise<Array>} List of Premium users
  */
-export async function getPremierUsers() {
+export async function getPremiumUsers() {
   try {
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('plan', '==', 'premier'));
+    const q = query(usersRef, where('plan', '==', 'premium'));
     const querySnapshot = await getDocs(q);
 
     const users = [];
@@ -440,52 +440,52 @@ export async function getPremierUsers() {
       });
     });
 
-    console.log(`✅ Found ${users.length} premier users`);
+    console.log(`✅ Found ${users.length} premium users`);
     return users;
 
   } catch (error) {
-    console.error('🔥 Error getting premier users:', error.message);
+    console.error('🔥 Error getting premium users:', error.message);
     throw error;
   }
 }
 
 /**
- * Update user plan to premier after successful payment
+ * Update user plan to premium after successful payment
  * Stores billing anniversary date (day of month when user paid)
  * 
  * @param {string} uid - User ID
- * @param {Object} newLimits - New token limits for premier plan
+ * @param {Object} newLimits - New token limits for premium plan
  * @returns {Promise<void>}
  */
-export async function upgradeToPremier(uid, newLimits) {
+export async function upgradeToPremium(uid, newLimits) {
   try {
     const userRef = doc(db, 'users', uid);
     const today = new Date();
     const billingDayOfMonth = today.getDate(); // e.g., 21
     
     await updateDoc(userRef, {
-      plan: 'premier',
+      plan: 'premium',
       limits: newLimits,
       upgradedAt: new Date().toISOString(),
       billingAnniversaryDay: billingDayOfMonth // Store day (1-31) for recurring billing
     });
 
-    console.log(`✅ Upgraded user ${uid} to premier - billing anniversary set to day ${billingDayOfMonth}`);
+    console.log(`✅ Upgraded user ${uid} to premium - billing anniversary set to day ${billingDayOfMonth}`);
 
   } catch (error) {
-    console.error('🔥 Error upgrading to premier:', error.message);
+    console.error('🔥 Error upgrading to premium:', error.message);
     throw error;
   }
 }
 
 /**
- * Get all premier users whose billing anniversary is today
- * @returns {Promise<Array>} List of premier users with anniversary today
+ * Get all premium users whose billing anniversary is today
+ * @returns {Promise<Array>} List of premium users with anniversary today
  */
-export async function getPremierUsersByAnniversary() {
+export async function getpremiumUsersByAnniversary() {
   try {
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('plan', '==', 'premier'));
+    const q = query(usersRef, where('plan', '==', 'premium'));
     const querySnapshot = await getDocs(q);
 
     const today = new Date();
@@ -503,7 +503,7 @@ export async function getPremierUsersByAnniversary() {
       }
     });
 
-    console.log(`✅ Found ${usersWithAnniversaryToday.length} premier users with anniversary today (${todayDate})`);
+    console.log(`✅ Found ${usersWithAnniversaryToday.length} premium users with anniversary today (${todayDate})`);
     return usersWithAnniversaryToday;
 
   } catch (error) {
@@ -526,7 +526,7 @@ export function getNextMonth(currentMonth) {
 }
 
 /**
- * Check if this is the first invoice after user upgraded to premier
+ * Check if this is the first invoice after user upgraded to premium
  * @param {string} uid - User ID
  * @param {string} upgradedAt - ISO date string when user upgraded
  * @returns {Promise<boolean>} True if this is the first invoice
@@ -605,22 +605,22 @@ export async function processPlatformFeePayment(uid, paymentData) {
     const now = new Date();
     const billingDay = now.getDate();
 
-    // Update user with payment info and upgrade to premier if needed
+    // Update user with payment info and upgrade to premium if needed
     const updateData = {
       lastPlatformFeePaymentDate: now.toISOString(),
       billingAnniversaryDay: billingDay
     };
 
-    // If user is not premier, upgrade them
-    if (user.plan !== 'premier') {
-      updateData.plan = 'premier';
+    // If user is not premium, upgrade them
+    if (user.plan !== 'premium') {
+      updateData.plan = 'premium';
       updateData.upgradedAt = now.toISOString();
-      // Set premier limits from centralized config
-      const premierLimits = getLimitsForPlan('premier');
+      // Set premium limits from centralized config
+      const premiumLimits = getLimitsForPlan('premium');
       updateData.limits = {
-        dailyLimit: premierLimits.chatTokensDaily,
-        maxTokensPerRequest: premierLimits.maxTokensPerRequest,
-        maxRequestsPerMinute: premierLimits.maxRequestsPerMinute
+        dailyLimit: premiumLimits.chatTokensDaily,
+        maxTokensPerRequest: premiumLimits.maxTokensPerRequest,
+        maxRequestsPerMinute: premiumLimits.maxRequestsPerMinute
       };
     }
 
@@ -632,7 +632,7 @@ export async function processPlatformFeePayment(uid, paymentData) {
       success: true,
       uid,
       billingAnniversaryDay: billingDay,
-      upgradedToPremier: user.plan !== 'premier',
+      upgradedTopremium: user.plan !== 'premium',
       nextBillingDate: getNextBillingDate(billingDay)
     };
 
@@ -703,7 +703,7 @@ export async function generateInvoiceEmailWithPaymentLink({ uid, user, invoiceDa
           
           <p>Hi ${user.name || 'there'},</p>
           
-          <p>Your monthly invoice for Korpo Premier is ready.</p>
+          <p>Your monthly invoice for Korpo premium is ready.</p>
           
           <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0;">Invoice Details</h3>

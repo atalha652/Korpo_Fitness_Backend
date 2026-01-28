@@ -34,7 +34,7 @@ import admin from 'firebase-admin';
 import usageRoutes from "./routes/usage/usageRoutes.js";
 import billingRoutes from "./routes/billing/billingRoutes.js";
 import aiProxyRoutes from "./routes/ai/aiProxyRoutes.js";
-import { getPremierUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
+import { getpremiumUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
 import { getPreviousMonth } from "./services/billingService.js";
 
 dotenv.config();
@@ -123,9 +123,9 @@ cron.schedule("0 0 * * *", async () => {
   console.log("💳 Starting anniversary-based billing process...");
 
   try {
-    // Get premier users whose billing anniversary is TODAY
-    const usersToday = await getPremierUsersByAnniversary();
-    console.log(`📊 Found ${usersToday.length} premier users with anniversary today`);
+    // Get premium users whose billing anniversary is TODAY
+    const usersToday = await getpremiumUsersByAnniversary();
+    console.log(`📊 Found ${usersToday.length} premium users with anniversary today`);
 
     if (usersToday.length === 0) {
       console.log("✅ No users have anniversary today, skipping billing");

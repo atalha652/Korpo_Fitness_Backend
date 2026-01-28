@@ -56,7 +56,7 @@ router.get('/pricing/limits', async (req, res) => {
         res.json({
             success: true,
             platformFee: platformFee,
-            description: 'Platform fee for token purchases and premier plan'
+            description: 'Platform fee for token purchases and premium plan'
         });
     } catch (error) {
         console.error('Error in GET /api/tokens/pricing/limits:', error);

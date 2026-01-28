@@ -24,7 +24,8 @@ import {
   getCurrentMonth,
   getTodayDate,
   isTimestampNewer,
-  extractMonthFromTimestamp
+  extractMonthFromTimestamp,
+  getTimeUntilReset
 } from '../utils/usageHelpers.js';
 import { getLimitsForPlan } from '../utils/limitsConfig.js';
 
@@ -34,7 +35,7 @@ import { getLimitsForPlan } from '../utils/limitsConfig.js';
 
 /**
  * Get hardcoded limits based on user plan
- * @param {string} plan - User plan ('free' or 'premier')
+ * @param {string} plan - User plan ('free' or 'premium')
  * @returns {Object} Limits object with daily and monthly token limits
  */
 export function getHardcodedLimits(plan = 'free') {
@@ -64,13 +65,17 @@ export async function getUserLimits(uid) {
     // Get hardcoded limits based on user plan
     const hardcodedLimits = getHardcodedLimits(userPlan);
 
-    // Return user plan and hardcoded limits
+    // Return user plan and complete limits (including request limits)
     return {
       uid,
       plan: userPlan,
       limits: {
         chatTokensDaily: hardcodedLimits.chatTokensDaily,
-        chatTokensMonthly: hardcodedLimits.chatTokensMonthly
+        chatTokensMonthly: hardcodedLimits.chatTokensMonthly,
+        voiceRequestsDaily: hardcodedLimits.voiceRequestsDaily,
+        chatRequestsDaily: hardcodedLimits.chatRequestsDaily,
+        maxTokensPerRequest: hardcodedLimits.maxTokensPerRequest,
+        maxRequestsPerMinute: hardcodedLimits.maxRequestsPerMinute
       },
       stripeCustomerId: user.stripeCustomerId || null
     };
@@ -122,6 +127,16 @@ export async function getMonthlyUsage(uid) {
         daily: {}, // Will be populated with YYYY-MM-DD keys
         monthly: 0
       },
+      requests: {
+        voice: {
+          daily: {}, // Will be populated with YYYY-MM-DD keys
+          monthly: 0
+        },
+        chat: {
+          daily: {}, // Will be populated with YYYY-MM-DD keys
+          monthly: 0
+        }
+      },
       totalCostUSD: 0,
       lastReportedAt: null
     };
@@ -154,6 +169,52 @@ export function getDailyTokensUsed(uid, usage) {
  */
 export function getMonthlyTokensUsed(uid, usage) {
   return usage.chatTokens?.monthly || 0;
+}
+
+/**
+ * Get today's voice request usage for a user
+ * 
+ * @param {string} uid - User ID
+ * @param {Object} usage - Usage document from getMonthlyUsage
+ * @returns {number} Voice requests used today
+ */
+export function getDailyVoiceRequestsUsed(uid, usage) {
+  const today = getTodayDate();
+  return usage.requests?.voice?.daily?.[today] || 0;
+}
+
+/**
+ * Get today's chat request usage for a user
+ * 
+ * @param {string} uid - User ID
+ * @param {Object} usage - Usage document from getMonthlyUsage
+ * @returns {number} Chat requests used today
+ */
+export function getDailyChatRequestsUsed(uid, usage) {
+  const today = getTodayDate();
+  return usage.requests?.chat?.daily?.[today] || 0;
+}
+
+/**
+ * Get monthly voice request usage for a user
+ * 
+ * @param {string} uid - User ID
+ * @param {Object} usage - Usage document from getMonthlyUsage
+ * @returns {number} Voice requests used this month
+ */
+export function getMonthlyVoiceRequestsUsed(uid, usage) {
+  return usage.requests?.voice?.monthly || 0;
+}
+
+/**
+ * Get monthly chat request usage for a user
+ * 
+ * @param {string} uid - User ID
+ * @param {Object} usage - Usage document from getMonthlyUsage
+ * @returns {number} Chat requests used this month
+ */
+export function getMonthlyChatRequestsUsed(uid, usage) {
+  return usage.requests?.chat?.monthly || 0;
 }
 
 /**
@@ -338,6 +399,12 @@ export async function getUsageSummary(uid) {
     const dailyUsed = getDailyTokensUsed(uid, usage);
     const monthlyUsed = getMonthlyTokensUsed(uid, usage);
 
+    // Get request usage
+    const dailyVoiceRequestsUsed = getDailyVoiceRequestsUsed(uid, usage);
+    const dailyChatRequestsUsed = getDailyChatRequestsUsed(uid, usage);
+    const monthlyVoiceRequestsUsed = getMonthlyVoiceRequestsUsed(uid, usage);
+    const monthlyChatRequestsUsed = getMonthlyChatRequestsUsed(uid, usage);
+
     // Handle both document formats for month and lastReportedAt
     const month = usage.month || usage.chatTokens?.month;
     const lastReportedAt = usage.lastReportedAt || usage.chatTokens?.lastReportedAt;
@@ -345,10 +412,19 @@ export async function getUsageSummary(uid) {
 
     return {
       plan: userLimits.plan,
+      // Token usage
       dailyUsed,
       dailyLimit: userLimits.limits.chatTokensDaily,
       monthlyUsed,
       monthlyLimit: userLimits.limits.chatTokensMonthly,
+      // Request usage
+      dailyVoiceRequestsUsed,
+      dailyChatRequestsUsed,
+      monthlyVoiceRequestsUsed,
+      monthlyChatRequestsUsed,
+      voiceRequestsLimit: userLimits.limits.voiceRequestsDaily,
+      chatRequestsLimit: userLimits.limits.chatRequestsDaily,
+      // General
       totalCostUSD,
       month,
       lastReportedAt
@@ -362,6 +438,7 @@ export async function getUsageSummary(uid) {
 /**
  * Check if user can use tokens (for GET /usage/can-use endpoint)
  * Uses hardcoded limits and checks against usage collection by uid
+ * Now includes request limits for voice and chat
  * 
  * @param {string} uid - User ID
  * @returns {Promise<Object>} { allowed: boolean, remainingDaily: number, reason?: string }
@@ -370,45 +447,189 @@ export async function checkCanUseTokens(uid) {
   try {
     // Get user plan and hardcoded limits
     const userLimits = await getUserLimits(uid);
-    const { chatTokensDaily, chatTokensMonthly } = userLimits.limits;
+    const { 
+      chatTokensDaily, 
+      chatTokensMonthly, 
+      voiceRequestsDaily, 
+      chatRequestsDaily 
+    } = userLimits.limits;
     
     // Get current usage from usage collection
     const usage = await getMonthlyUsage(uid);
     
-    // Calculate current usage
-    const dailyUsed = getDailyTokensUsed(uid, usage);
-    const monthlyUsed = getMonthlyTokensUsed(uid, usage);
+    // Calculate current token usage
+    const dailyTokensUsed = getDailyTokensUsed(uid, usage);
+    const monthlyTokensUsed = getMonthlyTokensUsed(uid, usage);
 
-    // Check limits
-    const dailyAllowed = dailyUsed < chatTokensDaily;
-    const monthlyAllowed = monthlyUsed < chatTokensMonthly;
-    const canUse = dailyAllowed && monthlyAllowed;
+    // Calculate current request usage
+    const dailyVoiceRequestsUsed = getDailyVoiceRequestsUsed(uid, usage);
+    const dailyChatRequestsUsed = getDailyChatRequestsUsed(uid, usage);
+    const monthlyVoiceRequestsUsed = getMonthlyVoiceRequestsUsed(uid, usage);
+    const monthlyChatRequestsUsed = getMonthlyChatRequestsUsed(uid, usage);
+
+    // Check token limits
+    const dailyTokensAllowed = dailyTokensUsed < chatTokensDaily;
+    const monthlyTokensAllowed = monthlyTokensUsed < chatTokensMonthly;
+    
+    // Check request limits
+    const dailyVoiceRequestsAllowed = dailyVoiceRequestsUsed < voiceRequestsDaily;
+    const dailyChatRequestsAllowed = dailyChatRequestsUsed < chatRequestsDaily;
+
+    const canUse = dailyTokensAllowed && monthlyTokensAllowed && 
+                   dailyVoiceRequestsAllowed && dailyChatRequestsAllowed;
 
     // Determine reason if not allowed
     let reason = null;
     if (!canUse) {
-      if (!dailyAllowed) {
-        reason = `Daily limit exceeded (${dailyUsed}/${chatTokensDaily} tokens used)`;
-      } else if (!monthlyAllowed) {
-        reason = `Monthly limit exceeded (${monthlyUsed}/${chatTokensMonthly} tokens used)`;
+      if (!dailyTokensAllowed) {
+        reason = `Daily token limit exceeded (${dailyTokensUsed}/${chatTokensDaily} tokens used)`;
+      } else if (!monthlyTokensAllowed) {
+        reason = `Monthly token limit exceeded (${monthlyTokensUsed}/${chatTokensMonthly} tokens used)`;
+      } else if (!dailyVoiceRequestsAllowed) {
+        reason = `Daily voice request limit exceeded (${dailyVoiceRequestsUsed}/${voiceRequestsDaily} requests used)`;
+      } else if (!dailyChatRequestsAllowed) {
+        reason = `Daily chat request limit exceeded (${dailyChatRequestsUsed}/${chatRequestsDaily} requests used)`;
       }
     }
 
-    console.log(`🔍 Can-use check for ${uid} (${userLimits.plan}): ${canUse ? 'ALLOWED' : 'BLOCKED'} - Daily: ${dailyUsed}/${chatTokensDaily}, Monthly: ${monthlyUsed}/${chatTokensMonthly}`);
+    console.log(`🔍 Can-use check for ${uid} (${userLimits.plan}): ${canUse ? 'ALLOWED' : 'BLOCKED'} - Tokens: ${dailyTokensUsed}/${chatTokensDaily}, Voice: ${dailyVoiceRequestsUsed}/${voiceRequestsDaily}, Chat: ${dailyChatRequestsUsed}/${chatRequestsDaily}`);
+
+    // Get time until next reset
+    const resetInfo = getTimeUntilReset();
 
     return {
       allowed: canUse,
-      remainingDailyTokens: Math.max(0, chatTokensDaily - dailyUsed),
-      remainingMonthlyTokens: Math.max(0, chatTokensMonthly - monthlyUsed),
-      dailyUsed,
-      monthlyUsed,
+      // Token limits
+      remainingDailyTokens: Math.max(0, chatTokensDaily - dailyTokensUsed),
+      remainingMonthlyTokens: Math.max(0, chatTokensMonthly - monthlyTokensUsed),
+      dailyUsed: dailyTokensUsed,
+      monthlyUsed: monthlyTokensUsed,
       dailyLimit: chatTokensDaily,
       monthlyLimit: chatTokensMonthly,
+      // Request limits
+      remainingDailyVoiceRequests: Math.max(0, voiceRequestsDaily - dailyVoiceRequestsUsed),
+      remainingDailyChatRequests: Math.max(0, chatRequestsDaily - dailyChatRequestsUsed),
+      dailyVoiceRequestsUsed,
+      dailyChatRequestsUsed,
+      monthlyVoiceRequestsUsed,
+      monthlyChatRequestsUsed,
+      voiceRequestsLimit: voiceRequestsDaily,
+      chatRequestsLimit: chatRequestsDaily,
+      // Reset information
+      resetInfo: {
+        nextResetTime: resetInfo.resetTime,
+        hoursUntilReset: resetInfo.hours,
+        minutesUntilReset: resetInfo.minutes
+      },
+      // General
       plan: userLimits.plan,
       reason: reason
     };
   } catch (error) {
     console.error('🔥 Error checking can use tokens:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Record request usage (voice or chat) in Firestore
+ * Updates daily and monthly request counts
+ * 
+ * @param {string} uid - User ID
+ * @param {string} requestType - Type of request ('voice' or 'chat')
+ * @param {number} count - Number of requests to add (default: 1)
+ * @returns {Promise<Object>} Updated usage record
+ * @throws {Error} If limits exceeded or Firestore error
+ */
+export async function recordRequestUsage(uid, requestType, count = 1) {
+  try {
+    // Validate request type
+    if (!['voice', 'chat'].includes(requestType)) {
+      throw new Error(`Invalid request type: ${requestType}. Must be 'voice' or 'chat'`);
+    }
+
+    // Get user limits
+    const userLimits = await getUserLimits(uid);
+    const dailyLimit = requestType === 'voice' 
+      ? userLimits.limits.voiceRequestsDaily 
+      : userLimits.limits.chatRequestsDaily;
+
+    // Get current usage
+    const usage = await getMonthlyUsage(uid);
+    const dailyUsed = requestType === 'voice' 
+      ? getDailyVoiceRequestsUsed(uid, usage)
+      : getDailyChatRequestsUsed(uid, usage);
+
+    // Check limits BEFORE recording
+    if (dailyUsed + count > dailyLimit) {
+      throw {
+        code: `DAILY_${requestType.toUpperCase()}_LIMIT_EXCEEDED`,
+        message: `Daily ${requestType} request limit exceeded. Used: ${dailyUsed}, Limit: ${dailyLimit}`,
+        statusCode: 429
+      };
+    }
+
+    // Prepare Firestore update
+    const month = getCurrentMonth();
+    const docId = `${uid}_${month}`;
+    const today = getTodayDate();
+    const usageRef = doc(db, 'usage', docId);
+
+    // Build updates object
+    const updates = {};
+    updates[`requests.${requestType}.daily.${today}`] = increment(count);
+    updates[`requests.${requestType}.monthly`] = increment(count);
+    updates['lastReportedAt'] = new Date().toISOString();
+
+    // Check if usage document exists
+    const usageDocRef = doc(db, 'usage', docId);
+    const usageDocSnap = await getDoc(usageDocRef);
+    
+    if (usageDocSnap.exists()) {
+      // Document exists - update it
+      await updateDoc(usageRef, updates);
+    } else {
+      // Create new document
+      const newUsageDoc = {
+        uid,
+        month,
+        chatTokens: {
+          daily: {},
+          monthly: 0
+        },
+        requests: {
+          voice: {
+            daily: requestType === 'voice' ? { [today]: count } : {},
+            monthly: requestType === 'voice' ? count : 0
+          },
+          chat: {
+            daily: requestType === 'chat' ? { [today]: count } : {},
+            monthly: requestType === 'chat' ? count : 0
+          }
+        },
+        totalCostUSD: 0,
+        lastReportedAt: new Date().toISOString()
+      };
+      await setDoc(usageRef, newUsageDoc);
+    }
+
+    console.log(`✅ Recorded ${requestType} request usage for ${uid}: +${count} requests`);
+
+    // Verify the data was written
+    const verifyUsage = await getMonthlyUsage(uid);
+    const verifyDailyUsed = requestType === 'voice' 
+      ? getDailyVoiceRequestsUsed(uid, verifyUsage)
+      : getDailyChatRequestsUsed(uid, verifyUsage);
+
+    return {
+      success: true,
+      requestType,
+      requestsAdded: count,
+      newDailyTotal: verifyDailyUsed
+    };
+
+  } catch (error) {
+    console.error(`🔥 Error recording ${requestType} request usage:`, error.message);
     throw error;
   }
 }

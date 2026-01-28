@@ -91,13 +91,13 @@ export function calculateTokenCost(model, promptTokens, completionTokens, cached
  * 
  * Tier Structure:
  * - Free: 1,000,000 daily tokens, 50,000 max per request, 500-1,000 requests/minute
- * - Premier: 3,000,000 daily tokens, 100,000 max per request, 2,000-5,000 requests/minute
+ * - premium: 1,000,000 daily tokens, 100,000 max per request, 2,000-5,000 requests/minute
  */
 export const USER_TIER_LIMITS = TOKEN_LIMITS;
 
 /**
  * Get user tier limits based on plan
- * @param {string} tier - User tier ('free' or 'premier')
+ * @param {string} tier - User tier ('free' or 'premium')
  * @returns {Object} Tier limits configuration
  */
 export function getTierLimits(tier = 'free') {
@@ -106,7 +106,7 @@ export function getTierLimits(tier = 'free') {
 
 /**
  * Check if user can make a request based on tier limits
- * @param {string} tier - User tier ('free' or 'premier')
+ * @param {string} tier - User tier ('free' or 'premium')
  * @param {number} requestTokens - Tokens in the current request
  * @param {number} dailyUsedTokens - Tokens already used today
  * @param {number} requestsThisMinute - Number of requests made in current minute (optional)
@@ -150,7 +150,7 @@ export function checkTierLimits(tier, requestTokens, dailyUsedTokens, requestsTh
 
 /**
  * Get tier summary for display
- * @param {string} tier - User tier ('free' or 'premier')
+ * @param {string} tier - User tier ('free' or 'premium')
  * @returns {Object} Formatted tier information
  */
 export function getTierSummary(tier) {
@@ -168,7 +168,7 @@ export function getTierSummary(tier) {
 
 /**
  * Get remaining tokens for today based on tier
- * @param {string} tier - User tier ('free' or 'premier')
+ * @param {string} tier - User tier ('free' or 'premium')
  * @param {number} dailyUsedTokens - Tokens already used today
  * @returns {number} Remaining tokens for today
  */

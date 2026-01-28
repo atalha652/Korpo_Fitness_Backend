@@ -55,13 +55,13 @@ export async function getOverviewStats() {
       return sum + (record.totalCostUSD || 0);
     }, 0);
 
-    const freeUsers = users.filter(u => u.plan !== 'premier').length;
-    const premierUsers = users.filter(u => u.plan === 'premier').length;
+    const freeUsers = users.filter(u => u.plan !== 'premium').length;
+    const premiumUsers = users.filter(u => u.plan === 'premium').length;
 
     return {
       totalUsers,
       freeUsers,
-      premierUsers,
+      premiumUsers,
       activeSubscriptions,
       totalRevenue: parseFloat(totalRevenue.toFixed(2)),
       totalTokensUsed,
@@ -367,11 +367,11 @@ export async function getUserGrowthStats() {
       const month = createdDate.toISOString().slice(0, 7);
       
       if (!byMonth[month]) {
-        byMonth[month] = { total: 0, free: 0, premier: 0 };
+        byMonth[month] = { total: 0, free: 0, premium: 0 };
       }
       byMonth[month].total += 1;
-      if (u.plan === 'premier') {
-        byMonth[month].premier += 1;
+      if (u.plan === 'premium') {
+        byMonth[month].premium += 1;
       } else {
         byMonth[month].free += 1;
       }
@@ -393,8 +393,8 @@ export async function getUserGrowthStats() {
 
     return {
       totalUsers: users.length,
-      freeUsers: users.filter(u => u.plan !== 'premier').length,
-      premierUsers: users.filter(u => u.plan === 'premier').length,
+      freeUsers: users.filter(u => u.plan !== 'premium').length,
+      premiumUsers: users.filter(u => u.plan === 'premium').length,
       monthlyBreakdown: cumulativeGrowth
     };
   } catch (error) {

@@ -6,23 +6,29 @@
  */
 
 // ============ TOKEN LIMITS CONFIGURATION ============
-// Based on your tier specifications:
-// Free: 1,000,000 daily, 50,000 max/request, 500-1,000 requests/minute
-// Premier: 3,000,000 daily, 100,000 max/request, 2,000-5,000 requests/minute
+// Updated: Both Free and premium users now have 1M daily tokens
+// Added: Request limits for voice and chat features
+// IMPORTANT: All daily limits reset at 12:00 AM UTC automatically
 export const TOKEN_LIMITS = {
   free: {
     chatTokensDaily: 1000000,    // 1M tokens per day
     chatTokensMonthly: 30000000, // 30M tokens per month (1M * 30 days)
     maxTokensPerRequest: 50000,  // 50K tokens per request
     maxRequestsPerMinute: 1000,  // 1,000 requests per minute (upper bound)
-    description: 'Free tier - 1M daily tokens, 50K per request, 1K req/min'
+    // Request limits per day
+    voiceRequestsDaily: 10,      // 10 voice requests per day
+    chatRequestsDaily: 20,       // 20 chat requests per day
+    description: 'Free tier - 1M daily tokens, 10 voice/20 chat requests per day'
   },
-  premier: {
-    chatTokensDaily: 3000000,    // 3M tokens per day  
-    chatTokensMonthly: 90000000, // 90M tokens per month (3M * 30 days)
+  premium: {
+    chatTokensDaily: 1000000,    // 1M tokens per day (updated from 3M)
+    chatTokensMonthly: 30000000, // 30M tokens per month (1M * 30 days, updated from 90M)
     maxTokensPerRequest: 100000, // 100K tokens per request
     maxRequestsPerMinute: 5000,  // 5,000 requests per minute (upper bound)
-    description: 'Premier tier - 3M daily tokens, 100K per request, 5K req/min'
+    // Request limits per day
+    voiceRequestsDaily: 20,      // 20 voice requests per day
+    chatRequestsDaily: 40,       // 40 chat requests per day
+    description: 'Premium tier - 1M daily tokens, 20 voice/40 chat requests per day'
   }
 };
 
@@ -30,7 +36,7 @@ export const TOKEN_LIMITS = {
 
 /**
  * Get limits for a specific plan
- * @param {string} plan - User plan ('free' or 'premier')
+ * @param {string} plan - User plan ('free' or 'premium')
  * @returns {Object} Limits configuration
  */
 export function getLimitsForPlan(plan = 'free') {
@@ -98,6 +104,26 @@ export function getMaxTokensPerRequest(plan = 'free') {
 export function getMaxRequestsPerMinute(plan = 'free') {
   const limits = getLimitsForPlan(plan);
   return limits.maxRequestsPerMinute;
+}
+
+/**
+ * Get daily voice request limit for a plan
+ * @param {string} plan - User plan
+ * @returns {number} Max voice requests per day
+ */
+export function getVoiceRequestsDaily(plan = 'free') {
+  const limits = getLimitsForPlan(plan);
+  return limits.voiceRequestsDaily;
+}
+
+/**
+ * Get daily chat request limit for a plan
+ * @param {string} plan - User plan
+ * @returns {number} Max chat requests per day
+ */
+export function getChatRequestsDaily(plan = 'free') {
+  const limits = getLimitsForPlan(plan);
+  return limits.chatRequestsDaily;
 }
 
 /**

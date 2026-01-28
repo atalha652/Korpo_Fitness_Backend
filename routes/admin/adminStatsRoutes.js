@@ -27,7 +27,7 @@ const router = express.Router();
  * {
  *   totalUsers: 150,
  *   freeUsers: 120,
- *   premierUsers: 30,
+ *   premiumUsers: 30,
  *   activeSubscriptions: 25,
  *   totalRevenue: 1250.50,
  *   totalTokensUsed: 5000000,
@@ -167,7 +167,7 @@ router.get('/revenue', adminAuthMiddleware, checkPermission('analytics', 'read')
  *     totalSpent: 150.75,
  *     apiUsageCost: 100.50,
  *     subscriptionCost: 50.25,
- *     plan: "premier",
+ *     plan: "premium",
  *     createdAt: "2025-01-01T..."
  *   }
  * ]
@@ -263,20 +263,20 @@ router.get('/models', adminAuthMiddleware, checkPermission('analytics', 'read'),
  * {
  *   totalUsers: 150,
  *   freeUsers: 120,
- *   premierUsers: 30,
+ *   premiumUsers: 30,
  *   monthlyBreakdown: [
  *     {
  *       month: "2024-11",
  *       total: 50,
  *       free: 45,
- *       premier: 5,
+ *       premium: 5,
  *       cumulative: 50
  *     },
  *     {
  *       month: "2024-12",
  *       total: 75,
  *       free: 60,
- *       premier: 15,
+ *       premium: 15,
  *       cumulative: 125
  *     }
  *   ]

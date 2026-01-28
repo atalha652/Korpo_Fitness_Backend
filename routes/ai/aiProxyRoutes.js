@@ -37,7 +37,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
  *   success: true,
  *   choices: [{text: "...", message: {role: "assistant", content: "..."}}],
  *   usage: {promptTokens, completionTokens, totalTokens},
- *   plan: "free" | "premier",
+ *   plan: "free" | "premium",
  *   cost: 0.00045,
  *   remainingDaily: 49500,
  *   remainingMonthly: 999500,
@@ -128,11 +128,11 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
 
     // ============ GET USER PLAN ============
     const userLimits = await getUserLimits(uid);
-    const isPremier = userLimits.plan === 'premier';
+    const ispremium = userLimits.plan === 'premium';
 
     // ============ CALCULATE COST ============
-    // Free users show $0, premier users show actual cost
-    const cost = isPremier ? calculateTokenCost(model, promptTokens, completionTokens) : 0;
+    // Free users show $0, premium users show actual cost
+    const cost = ispremium ? calculateTokenCost(model, promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -168,7 +168,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
       cost: cost,
       remainingDaily: usageSummary.remainingDaily,
       remainingMonthly: usageSummary.remainingMonthly,
-      totalCostUSD: isPremier ? usageSummary.totalCostUSD : 0
+      totalCostUSD: ispremium ? usageSummary.totalCostUSD : 0
     });
 
   } catch (error) {
@@ -200,7 +200,7 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
  *   text: "transcribed text",
  *   language: "en",
  *   usage: {promptTokens, completionTokens, totalTokens},
- *   plan: "free" | "premier",
+ *   plan: "free" | "premium",
  *   cost: 0.00025,
  *   remainingDaily: 49500,
  *   remainingMonthly: 999500,
@@ -336,9 +336,9 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
     const completionTokens = Math.ceil(estimatedTokens * 0.5);
     const totalTokens = promptTokens + completionTokens;
     
-    const isPremier = userPlan === 'premier';
+    const ispremium = userPlan === 'premium';
     // Calculate actual cost based on model used (whisper-1)
-    const cost = isPremier ? calculateTokenCost('whisper-1', promptTokens, completionTokens) : 0;
+    const cost = ispremium ? calculateTokenCost('whisper-1', promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -376,7 +376,7 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
       cost: cost,
       remainingDaily: usageSummary.remainingDaily,
       remainingMonthly: usageSummary.remainingMonthly,
-      totalCostUSD: isPremier ? usageSummary.totalCostUSD : 0
+      totalCostUSD: ispremium ? usageSummary.totalCostUSD : 0
     });
 
   } catch (error) {
@@ -412,7 +412,7 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
  *   audio: "base64 encoded audio data",
  *   mimeType: "audio/mpeg",
  *   usage: {promptTokens, estimatedTokens, totalTokens},
- *   plan: "premier",
+ *   plan: "premium",
  *   cost: 0.00015,
  *   remainingDaily: 49500,
  *   remainingMonthly: 999500,
@@ -447,11 +447,11 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
 
      const userPlan = userSnap.data().plan || 'free';
      
-     if (userPlan !== 'premier') {
+     if (userPlan !== 'premium') {
        return res.status(403).json({
          success: false,
-         error: 'TTS restricted to Premier users',
-         code: 'PREMIER_REQUIRED',
+         error: 'TTS restricted to premium users',
+         code: 'premium_REQUIRED',
          plan: userPlan
        });
      }
@@ -582,7 +582,7 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
  *   audio: "base64 encoded audio data",
  *   mimeType: "audio/mpeg",
  *   usage: {promptTokens, completionTokens, totalTokens},
- *   plan: "free" | "premier",
+ *   plan: "free" | "premium",
  *   cost: 0.00015,
  *   remainingDaily: 49500,
  *   remainingMonthly: 999500,
@@ -631,11 +631,11 @@ router.post('/text-to-speech', verifyFirebaseToken, async (req, res) => {
 
     const userPlan = userSnap.data().plan || 'free';
     
-    if (userPlan !== 'premier') {
+    if (userPlan !== 'premium') {
       return res.status(403).json({
         success: false,
-        error: 'TTS restricted to Premier users',
-        code: 'PREMIER_REQUIRED',
+        error: 'TTS restricted to premium users',
+        code: 'premium_REQUIRED',
         plan: userPlan
       });
     }
@@ -942,8 +942,8 @@ ${getExampleStructure()}`
     const promptTokens = aiData.usage?.prompt_tokens || 0;
     const completionTokens = aiData.usage?.completion_tokens || 0;
     const totalTokens = promptTokens + completionTokens;
-    const isPremier = userPlan === 'premier';
-    const cost = isPremier ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
+    const ispremium = userPlan === 'premium';
+    const cost = ispremium ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -981,7 +981,7 @@ ${getExampleStructure()}`
       cost,
       remainingDaily: usageSummary.remainingDaily,
       remainingMonthly: usageSummary.remainingMonthly,
-      totalCostUSD: isPremier ? usageSummary.totalCostUSD : 0
+      totalCostUSD: ispremium ? usageSummary.totalCostUSD : 0
     });
 
   } catch (error) {
@@ -1120,8 +1120,8 @@ router.post('/extract-keywords', verifyFirebaseToken, async (req, res) => {
     const promptTokens = aiData.usage?.prompt_tokens || 0;
     const completionTokens = aiData.usage?.completion_tokens || 0;
     const totalTokens = promptTokens + completionTokens;
-    const isPremier = userPlan === 'premier';
-    const cost = isPremier ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
+    const ispremium = userPlan === 'premium';
+    const cost = ispremium ? calculateTokenCost('gpt-4o-mini', promptTokens, completionTokens) : 0;
 
     // ============ RECORD USAGE ============
     try {
@@ -1157,7 +1157,7 @@ router.post('/extract-keywords', verifyFirebaseToken, async (req, res) => {
       cost,
       remainingDaily: usageSummary.remainingDaily,
       remainingMonthly: usageSummary.remainingMonthly,
-      totalCostUSD: isPremier ? usageSummary.totalCostUSD : 0
+      totalCostUSD: ispremium ? usageSummary.totalCostUSD : 0
     });
 
   } catch (error) {

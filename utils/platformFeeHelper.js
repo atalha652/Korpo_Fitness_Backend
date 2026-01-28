@@ -34,8 +34,8 @@ export async function checkPlatformFeeRequired(userId) {
 
     const userData = userSnap.data();
     
-    // If user is not premier, no platform fee required
-    if (userData.plan !== 'premier') {
+    // If user is not premium, no platform fee required
+    if (userData.plan !== 'premium') {
       return {
         required: false,
         reason: 'Free plan user - no platform fee required',

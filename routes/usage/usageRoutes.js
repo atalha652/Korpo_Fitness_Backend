@@ -13,6 +13,7 @@ import {
   getUsageSummary,
   checkCanUseTokens,
   recordTokenUsage,
+  recordRequestUsage,
   validateTokenReport,
   getUserLimits,
   getMonthlyUsage
@@ -24,17 +25,24 @@ const router = express.Router();
  * GET /usage/summary
  * 
  * Returns user's current token usage and limits
+ * Now includes request usage for voice and chat
  * 
  * Response:
  * {
- *   plan: "free" | "premier",
+ *   plan: "free" | "premium",
  *   dailyUsed: 1250,
  *   dailyLimit: 1000000,
  *   monthlyUsed: 15000,
  *   monthlyLimit: 30000000,
+ *   dailyVoiceRequestsUsed: 2,
+ *   dailyChatRequestsUsed: 5,
+ *   monthlyVoiceRequestsUsed: 25,
+ *   monthlyChatRequestsUsed: 120,
+ *   voiceRequestsLimit: 10, // free: 10, premium: 20
+ *   chatRequestsLimit: 20,  // free: 20, premium: 40
  *   totalCostUSD: 45.32,
- *   month: "2025-01",
- *   lastReportedAt: "2025-01-21T10:30:00Z"
+ *   month: "2026-01",
+ *   lastReportedAt: "2026-01-27T10:30:00Z"
  * }
  */
 router.get('/summary', verifyFirebaseToken, async (req, res) => {
@@ -70,6 +78,9 @@ router.get('/summary', verifyFirebaseToken, async (req, res) => {
  * 
  * Checks if user can still use tokens (before making API call)
  * Uses hardcoded limits and checks against usage collection by uid
+ * Now includes request limits for voice and chat
+ * 
+ * IMPORTANT: All daily limits reset at 12:00 AM UTC
  * 
  * Response:
  * {
@@ -82,6 +93,19 @@ router.get('/summary', verifyFirebaseToken, async (req, res) => {
  *     monthlyUsed: 15000,
  *     dailyLimit: 1000000,
  *     monthlyLimit: 30000000,
+ *     remainingDailyVoiceRequests: 8,
+ *     remainingDailyChatRequests: 15,
+ *     dailyVoiceRequestsUsed: 2,
+ *     dailyChatRequestsUsed: 5,
+ *     monthlyVoiceRequestsUsed: 25,
+ *     monthlyChatRequestsUsed: 120,
+ *     voiceRequestsLimit: 10, // free: 10, premium: 20
+ *     chatRequestsLimit: 20,  // free: 20, premium: 40
+ *     resetInfo: {            // NEW: Reset information
+ *       nextResetTime: "2026-01-29T00:00:00.000Z",
+ *       hoursUntilReset: 17,
+ *       minutesUntilReset: 27
+ *     },
  *     plan: "free",
  *     reason: null // Only present if not allowed
  *   }
@@ -223,6 +247,100 @@ router.post('/report', verifyFirebaseToken, async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to record token usage',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+/**
+ * POST /usage/record-request
+ * 
+ * Records request usage (voice or chat) from frontend
+ * Called by frontend after each voice/chat request
+ * 
+ * Request body:
+ * {
+ *   requestType: "voice" | "chat",
+ *   count: 1 // optional, defaults to 1
+ * }
+ * 
+ * Response on success:
+ * {
+ *   success: true,
+ *   message: "Request usage recorded",
+ *   data: {
+ *     requestType: "voice",
+ *     requestsAdded: 1,
+ *     newDailyTotal: 5
+ *   }
+ * }
+ * 
+ * Response on error:
+ * {
+ *   error: "Daily voice request limit exceeded...",
+ *   code: "DAILY_VOICE_LIMIT_EXCEEDED"
+ * }
+ */
+router.post('/record-request', verifyFirebaseToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const { requestType, count = 1 } = req.body;
+
+    // ============ VALIDATION ============
+    
+    // Validate request type
+    if (!requestType || !['voice', 'chat'].includes(requestType)) {
+      return res.status(400).json({
+        error: 'Invalid request type. Must be "voice" or "chat"',
+        code: 'INVALID_REQUEST_TYPE'
+      });
+    }
+
+    // Validate count
+    if (!Number.isInteger(count) || count <= 0) {
+      return res.status(400).json({
+        error: 'Count must be a positive integer',
+        code: 'INVALID_COUNT'
+      });
+    }
+
+    // ============ RECORD REQUEST USAGE ============
+
+    const result = await recordRequestUsage(uid, requestType, count);
+
+    res.status(201).json({
+      success: true,
+      message: `${requestType} request usage recorded`,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('🔥 Error recording request usage:', error.message);
+
+    // Handle specific error codes
+    if (error.code === 'DAILY_VOICE_LIMIT_EXCEEDED') {
+      return res.status(429).json({
+        error: error.message,
+        code: 'DAILY_VOICE_LIMIT_EXCEEDED'
+      });
+    }
+
+    if (error.code === 'DAILY_CHAT_LIMIT_EXCEEDED') {
+      return res.status(429).json({
+        error: error.message,
+        code: 'DAILY_CHAT_LIMIT_EXCEEDED'
+      });
+    }
+
+    if (error.message === 'User not found') {
+      return res.status(404).json({
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    res.status(500).json({
+      error: 'Failed to record request usage',
       code: 'INTERNAL_ERROR'
     });
   }

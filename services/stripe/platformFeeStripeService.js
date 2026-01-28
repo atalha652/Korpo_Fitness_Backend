@@ -17,7 +17,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 /**
  * Create a Stripe checkout session specifically for platform fee payment
- * This is used when users need to pay the monthly platform fee to upgrade to Premier
+ * This is used when users need to pay the monthly platform fee to upgrade to premium
  * @param {Object} params - Payment parameters
  * @param {string} params.userId - User ID (required)
  * @param {string} params.userEmail - User email (optional, pre-fills checkout form)
@@ -61,7 +61,7 @@ export async function createPlatformFeeCheckoutSession({
           price_data: {
             currency: 'usd',
             product_data: {
-              name: 'Korpo Premier Platform Fee',
+              name: 'Korpo premium Platform Fee',
               description: 'Monthly platform access, infrastructure, and premium support',
             },
             unit_amount: Math.round(platformFeeAmount * 100), // Convert to cents

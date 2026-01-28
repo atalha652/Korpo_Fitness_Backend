@@ -61,3 +61,56 @@ export function extractMonthFromTimestamp(isoTimestamp) {
     return getCurrentMonth();
   }
 }
+
+/**
+ * Get the next daily reset time (12:00 AM UTC)
+ * @returns {Date} Next reset time
+ */
+export function getNextDailyReset() {
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 0, 0, 0); // Set to 12:00 AM UTC
+  return tomorrow;
+}
+
+/**
+ * Get time remaining until next daily reset
+ * @returns {Object} { hours, minutes, seconds, totalMs }
+ */
+export function getTimeUntilReset() {
+  const now = new Date();
+  const nextReset = getNextDailyReset();
+  const diffMs = nextReset.getTime() - now.getTime();
+  
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+  
+  return {
+    hours,
+    minutes,
+    seconds,
+    totalMs: diffMs,
+    resetTime: nextReset.toISOString()
+  };
+}
+
+/**
+ * Check if it's a new day compared to a given timestamp
+ * @param {string} lastTimestamp - ISO timestamp to compare
+ * @returns {boolean} True if it's a new day (UTC)
+ */
+export function isNewDay(lastTimestamp) {
+  if (!lastTimestamp) return true;
+  
+  try {
+    const lastDate = new Date(lastTimestamp);
+    const today = getTodayDate();
+    const lastDay = `${lastDate.getUTCFullYear()}-${String(lastDate.getUTCMonth() + 1).padStart(2, '0')}-${String(lastDate.getUTCDate()).padStart(2, '0')}`;
+    
+    return today !== lastDay;
+  } catch (error) {
+    return true;
+  }
+}

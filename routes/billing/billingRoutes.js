@@ -9,10 +9,11 @@
 
 import express from 'express';
 import { verifyFirebaseToken } from '../../middleware/firebaseAuthMiddleware.js';
+import { getLimitsForPlan } from '../../utils/limitsConfig.js';
 import {
   createUpgradeCheckout,
   generateMonthlyInvoice,
-  upgradeToPremier
+  upgradeTopremium
 } from '../../services/billingService.js';
 
 const router = express.Router();
@@ -20,7 +21,7 @@ const router = express.Router();
 /**
  * POST /billing/upgrade
  * 
- * Creates a Stripe checkout session for plan upgrade to premier
+ * Creates a Stripe checkout session for plan upgrade to premium
  * User is redirected to Stripe checkout, then back to app
  * 
  * Query params:
@@ -89,7 +90,7 @@ router.post('/upgrade', verifyFirebaseToken, async (req, res) => {
  * POST /billing/upgrade-success
  * 
  * Called after successful Stripe payment
- * Updates user plan to "premier" and increases token limits
+ * Updates user plan to "premium" and increases token limits
  * 
  * Normally called by Stripe webhook, but also available for manual testing
  * 
@@ -101,7 +102,7 @@ router.post('/upgrade', verifyFirebaseToken, async (req, res) => {
  * Response:
  * {
  *   success: true,
- *   message: "Plan upgraded to premier"
+ *   message: "Plan upgraded to premium"
  * }
  */
 router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
@@ -110,19 +111,20 @@ router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
 
     // ============ UPGRADE USER ============
 
-    // Premium limits (adjust these based on your requirements)
-    const premierLimits = {
-      chatTokensDaily: 100000,    // Higher daily limit for premier
-      chatTokensMonthly: 3000000   // Higher monthly limit for premier
+    // Get premium limits from centralized configuration
+    const premiumLimitsConfig = getLimitsForPlan('premium');
+    const premiumLimits = {
+      chatTokensDaily: premiumLimitsConfig.chatTokensDaily,
+      chatTokensMonthly: premiumLimitsConfig.chatTokensMonthly
     };
 
-    await upgradeToPremier(uid, premierLimits);
+    await upgradeTopremium(uid, premiumLimits);
 
     res.json({
       success: true,
-      message: 'Plan upgraded to premier',
+      message: 'Plan upgraded to premium',
       data: {
-        newLimits: premierLimits
+        newLimits: premiumLimits
       }
     });
 
