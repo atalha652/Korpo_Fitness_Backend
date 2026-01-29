@@ -26,6 +26,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
  * @param {number} params.price - Expected price (for validation)
  * @param {string} params.successUrl - Success redirect URL
  * @param {string} params.cancelUrl - Cancel redirect URL
+ * @param {boolean|null} params.platformFeePaid - Override platform fee requirement (null=auto, false=require fee, true=skip fee)
  * @returns {Promise<Object>} Checkout session
  */
 export async function createTokenPurchaseSession({
@@ -34,6 +35,7 @@ export async function createTokenPurchaseSession({
   price,
   successUrl,
   cancelUrl,
+  platformFeePaid = null, // Add parameter to override platform fee logic
 }) {
   try {
     if (!userId) {
@@ -55,15 +57,40 @@ export async function createTokenPurchaseSession({
 
     // Check if platform fee is required for this user
     const platformFeeStatus = await checkPlatformFeeRequired(userId);
-    const platformFeeRequired = platformFeeStatus.required;
+    let platformFeeRequired = platformFeeStatus.required;
+
+    console.log(`🔧 platformFeePaid parameter received:`, platformFeePaid);
+
+    // Override platform fee requirement if explicitly specified by frontend
+    if (platformFeePaid === false) {
+      platformFeeRequired = true; // Frontend says platform fee not paid, so require it
+      console.log(`🔧 Platform fee requirement overridden to TRUE because platformFeePaid=false`);
+    } else if (platformFeePaid === true) {
+      platformFeeRequired = false; // Frontend says platform fee already paid, so don't require it
+      console.log(`🔧 Platform fee requirement overridden to FALSE because platformFeePaid=true`);
+    }
+
+    console.log(`🔍 Final platform fee decision:`, {
+      originalRequired: platformFeeStatus.required,
+      finalRequired: platformFeeRequired,
+      platformFeePaid: platformFeePaid,
+      reason: platformFeeStatus.reason
+    });
 
     // Backend recalculates price independently (mandatory validation)
     // Simplified: tokens are free, only platform fee applies
     const platformFeeAmount = platformFeeRequired ? getPlatformFee() : 0;
     const totalPrice = platformFeeAmount;
 
+    // Create price calculation object for metadata
+    const priceCalculation = {
+      tokenPrice: 0, // Tokens are free
+      platformFee: platformFeeAmount,
+      totalPrice: totalPrice
+    };
+
     // Validate that provided price matches calculated total price
-    if (price !== undefined && price !== totalPrice) {
+    if (price !== undefined && Math.abs(price - totalPrice) > 0.01) { // Use small epsilon for float comparison
       throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${totalPrice.toFixed(2)}`);
     }
 
@@ -83,6 +110,11 @@ export async function createTokenPurchaseSession({
         },
         quantity: 1,
       });
+    }
+
+    // Ensure we have at least one line item
+    if (lineItems.length === 0) {
+      throw new Error('No charges required. Platform fee not needed for this user.');
     }
 
     const session = await stripe.checkout.sessions.create({

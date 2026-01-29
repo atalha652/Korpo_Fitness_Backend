@@ -95,7 +95,15 @@ router.get('/platform-fee/status/:userId', async (req, res) => {
  */
 router.post('/purchase/checkout', async (req, res) => {
     try {
-        const { userId, tokens, price, successUrl, cancelUrl } = req.body;
+        const { userId, tokens, price, successUrl, cancelUrl, platformFeePaid } = req.body;
+
+        console.log(`📥 Checkout request received:`, {
+            userId,
+            tokens,
+            price,
+            platformFeePaid,
+            bodyKeys: Object.keys(req.body)
+        });
 
         // Validation
         if (!userId || typeof userId !== 'string' || userId.trim() === '') {
@@ -119,6 +127,7 @@ router.post('/purchase/checkout', async (req, res) => {
             price, // Optional: for validation
             successUrl,
             cancelUrl,
+            platformFeePaid, // Pass the platform fee override
         });
 
         res.json(session);
