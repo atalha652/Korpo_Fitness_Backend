@@ -33,6 +33,8 @@ import { streamChatController } from "./controllers/openrouter/openrouterStreamC
 import admin from 'firebase-admin';
 import usageRoutes from "./routes/usage/usageRoutes.js";
 import billingRoutes from "./routes/billing/billingRoutes.js";
+import subscriptionRoutes from "./routes/subscription/subscriptionRoutes.js";
+import planManagementRoutes from "./routes/subscription/planManagementRoutes.js";
 import aiProxyRoutes from "./routes/ai/aiProxyRoutes.js";
 import { getpremiumUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
 import { getPreviousMonth } from "./services/billingService.js";
@@ -1872,19 +1874,46 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
   const sig = req.headers["stripe-signature"];
   
   console.log("🔍 Debug - Stripe Webhook Secret exists:", !!process.env.STRIPE_WEBHOOK_SECRET);
+  console.log("🔍 Debug - Subscription Webhook Secret exists:", !!process.env.STRIPE_SUBSCRIPTION_WEBHOOK_SECRET);
   console.log("🔍 Debug - Signature header:", sig ? "✅ Present" : "❌ Missing");
 
   let event;
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-    console.log("✅ Webhook signature verified! Event type:", event.type);
-  } catch (err) {
-    console.error("❌ Webhook signature verification failed:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+  let webhookSource = 'general';
+  
+  // Try to verify with subscription webhook secret first
+  if (process.env.STRIPE_SUBSCRIPTION_WEBHOOK_SECRET) {
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_SUBSCRIPTION_WEBHOOK_SECRET
+      );
+      webhookSource = 'subscription';
+      console.log("✅ Subscription webhook signature verified! Event type:", event.type);
+    } catch (err) {
+      console.log("🔍 Not a subscription webhook, trying general webhook...");
+    }
+  }
+  
+  // If subscription webhook failed, try general webhook secret
+  if (!event && process.env.STRIPE_WEBHOOK_SECRET) {
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+      webhookSource = 'general';
+      console.log("✅ General webhook signature verified! Event type:", event.type);
+    } catch (err) {
+      console.error("❌ Webhook signature verification failed for both secrets:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  }
+  
+  if (!event) {
+    console.error("❌ No webhook secrets configured");
+    return res.status(400).send("Webhook Error: No webhook secrets configured");
   }
 
   // ✅ Handle different events
@@ -2101,6 +2130,96 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
         }
       }
       break;
+
+    // =============== SUBSCRIPTION WEBHOOK EVENTS ===============
+    case "customer.subscription.created":
+      {
+        console.log("🔔 Subscription created:", event.data.object.id);
+        if (webhookSource === 'subscription') {
+          const { handleSubscriptionCreated } = await import('./services/stripe/subscriptionService.js');
+          await handleSubscriptionCreated(event.data.object);
+        }
+      }
+      break;
+
+    case "customer.subscription.updated":
+      {
+        console.log("🔔 Subscription updated:", event.data.object.id);
+        if (webhookSource === 'subscription') {
+          // Handle subscription updates (plan changes, etc.)
+          const subscription = event.data.object;
+          const userId = subscription.metadata.userId;
+          
+          if (userId) {
+            const userRef = doc(db, 'users', userId);
+            await updateDoc(userRef, {
+              subscriptionStatus: subscription.status,
+              currentPeriodStart: new Date(subscription.current_period_start * 1000).toISOString(),
+              currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString()
+            });
+            console.log(`✅ Updated subscription status for user ${userId}: ${subscription.status}`);
+          }
+        }
+      }
+      break;
+
+    case "customer.subscription.deleted":
+      {
+        console.log("🔔 Subscription cancelled:", event.data.object.id);
+        if (webhookSource === 'subscription') {
+          const subscription = event.data.object;
+          const userId = subscription.metadata.userId;
+          
+          if (userId) {
+            const userRef = doc(db, 'users', userId);
+            await updateDoc(userRef, {
+              subscriptionStatus: 'cancelled',
+              plan: 'free',
+              cancelledAt: new Date().toISOString()
+            });
+            console.log(`✅ Cancelled subscription for user ${userId}`);
+          }
+        }
+      }
+      break;
+
+    case "invoice.payment_succeeded":
+      {
+        console.log("🔔 Invoice payment succeeded:", event.data.object.id);
+        if (webhookSource === 'subscription') {
+          const { handleInvoicePaymentSucceeded } = await import('./services/stripe/subscriptionService.js');
+          await handleInvoicePaymentSucceeded(event.data.object);
+        }
+      }
+      break;
+
+    case "invoice.payment_failed":
+      {
+        console.log("🔔 Invoice payment failed:", event.data.object.id);
+        if (webhookSource === 'subscription') {
+          const invoice = event.data.object;
+          const customerId = invoice.customer;
+          
+          // Find user and update status
+          const usersRef = collection(db, 'users');
+          const userQuery = query(usersRef, where('stripeCustomerId', '==', customerId));
+          const userDocs = await getDocs(userQuery);
+          
+          if (!userDocs.empty) {
+            const userDoc = userDocs.docs[0];
+            const userId = userDoc.id;
+            
+            await updateDoc(userDoc.ref, {
+              subscriptionStatus: 'past_due',
+              lastFailedPayment: new Date().toISOString()
+            });
+            
+            console.log(`⚠️ Payment failed for user ${userId}, marked as past_due`);
+          }
+        }
+      }
+      break;
+    // =============== END SUBSCRIPTION WEBHOOK EVENTS ===============
 
     default:
       console.log(`ℹ️ Unhandled event type ${event.type}`);
@@ -3192,6 +3311,8 @@ app.use('/api', userTokenHistoryRoutes);
 // Mount usage and billing routes
 app.use('/api/usage', usageRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/plans', planManagementRoutes);
 // =============== END USAGE TRACKING & BILLING SYSTEM ===============
 
 // =============== AI PROXY SYSTEM (Mobile App) ===============
