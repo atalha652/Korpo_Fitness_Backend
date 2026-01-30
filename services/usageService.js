@@ -44,10 +44,10 @@ export function getHardcodedLimits(plan = 'free') {
 
 /**
  * Get user's current plan and token limits
- * Now uses hardcoded limits instead of database-stored limits
+ * Prioritizes database-stored limits over hardcoded limits for flexibility
  * 
  * @param {string} uid - User ID from Firebase
- * @returns {Promise<Object>} User data with plan and hardcoded limits
+ * @returns {Promise<Object>} User data with plan and limits
  * @throws {Error} If user not found
  */
 export async function getUserLimits(uid) {
@@ -62,22 +62,34 @@ export async function getUserLimits(uid) {
     const user = userSnap.data();
     const userPlan = user.plan || 'free';
     
-    // Get hardcoded limits based on user plan
-    const hardcodedLimits = getHardcodedLimits(userPlan);
-
-    // Return user plan and complete limits (including request limits)
-    return {
-      uid,
-      plan: userPlan,
-      limits: {
+    // Check if user has custom limits stored in database (from plan changes)
+    let limits;
+    if (user.limits && user.limitsUpdatedAt) {
+      // Use database-stored limits (updated during plan changes)
+      limits = user.limits;
+      console.log(`📊 Using database-stored limits for ${uid} (${userPlan}):`, limits);
+    } else {
+      // Fallback to hardcoded limits based on plan
+      const hardcodedLimits = getHardcodedLimits(userPlan);
+      limits = {
         chatTokensDaily: hardcodedLimits.chatTokensDaily,
         chatTokensMonthly: hardcodedLimits.chatTokensMonthly,
         voiceRequestsDaily: hardcodedLimits.voiceRequestsDaily,
         chatRequestsDaily: hardcodedLimits.chatRequestsDaily,
         maxTokensPerRequest: hardcodedLimits.maxTokensPerRequest,
         maxRequestsPerMinute: hardcodedLimits.maxRequestsPerMinute
-      },
-      stripeCustomerId: user.stripeCustomerId || null
+      };
+      console.log(`📊 Using hardcoded limits for ${uid} (${userPlan}):`, limits);
+    }
+
+    // Return user plan and limits
+    return {
+      uid,
+      plan: userPlan,
+      limits,
+      stripeCustomerId: user.stripeCustomerId || null,
+      limitsSource: user.limitsUpdatedAt ? 'database' : 'hardcoded',
+      limitsUpdatedAt: user.limitsUpdatedAt || null
     };
   } catch (error) {
     console.error('🔥 Error getting user limits:', error.message);

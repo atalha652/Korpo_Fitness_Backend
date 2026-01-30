@@ -48,13 +48,126 @@ export async function upgradeToPremium({ userId, userEmail, successUrl, cancelUr
 }
 
 /**
+ * Complete upgrade to premium after successful payment
+ * Updates user plan and limits in database
+ * 
+ * @param {string} userId - User ID
+ * @param {Object} options - Upgrade options
+ * @returns {Promise<Object>} Upgrade result
+ */
+export async function completeUpgradeToPremium(userId, options = {}) {
+  const {
+    resetDailyUsage = false,
+    resetMonthlyUsage = false,
+    grantBonusTokens = false,
+    bonusTokens = 0
+  } = options;
+  
+  try {
+    const userRef = doc(db, 'users', userId);
+    const userDoc = await getDoc(userRef);
+
+    if (!userDoc.exists()) {
+      throw new Error('User not found');
+    }
+
+    const userData = userDoc.data();
+
+    if (userData.plan === 'premium') {
+      console.log(`User ${userId} already premium, skipping upgrade`);
+      return { message: 'User already premium' };
+    }
+
+    // Get current usage before upgrade
+    const { getCurrentUsageForPlanChange, applyUsageAdjustment } = await import('./usageResetService.js');
+    const currentUsage = await getCurrentUsageForPlanChange(userId);
+
+    // Get premium plan limits
+    const { getLimitsForPlan } = await import('../utils/limitsConfig.js');
+    const premiumLimits = getLimitsForPlan('premium');
+    
+    const today = new Date();
+    const billingDayOfMonth = today.getDate();
+
+    // Update user to premium with new limits
+    await updateDoc(userRef, {
+      plan: 'premium',
+      subscriptionStatus: 'active',
+      upgradedAt: new Date().toISOString(),
+      billingAnniversaryDay: billingDayOfMonth,
+      // Update limits to premium plan limits
+      limits: {
+        chatTokensDaily: premiumLimits.chatTokensDaily,
+        chatTokensMonthly: premiumLimits.chatTokensMonthly,
+        voiceRequestsDaily: premiumLimits.voiceRequestsDaily,
+        chatRequestsDaily: premiumLimits.chatRequestsDaily,
+        maxTokensPerRequest: premiumLimits.maxTokensPerRequest,
+        maxRequestsPerMinute: premiumLimits.maxRequestsPerMinute
+      },
+      limitsUpdatedAt: new Date().toISOString()
+    });
+
+    // Apply usage adjustments if requested
+    let usageAdjustments = null;
+    if (resetDailyUsage || resetMonthlyUsage || grantBonusTokens) {
+      usageAdjustments = await applyUsageAdjustment(userId, 'upgrade', {
+        resetDaily: resetDailyUsage,
+        resetMonthly: resetMonthlyUsage,
+        grantBonus: grantBonusTokens,
+        bonusTokens
+      });
+    }
+
+    // Log upgrade event
+    await addDoc(collection(db, 'plan_changes'), {
+      userId,
+      action: 'upgrade',
+      fromPlan: userData.plan || 'free',
+      toPlan: 'premium',
+      timestamp: new Date().toISOString(),
+      billingAnniversaryDay: billingDayOfMonth,
+      newLimits: premiumLimits,
+      currentUsageBeforeUpgrade: currentUsage,
+      usageAdjustments: usageAdjustments
+    });
+
+    console.log(`✅ Upgraded user ${userId} to premium with updated limits:`, premiumLimits);
+    if (usageAdjustments) {
+      console.log(`📊 Applied usage adjustments:`, usageAdjustments);
+    }
+
+    return {
+      newPlan: 'premium',
+      newLimits: premiumLimits,
+      subscriptionStatus: 'active',
+      billingAnniversaryDay: billingDayOfMonth,
+      currentUsageBeforeUpgrade: currentUsage,
+      usageAdjustments: usageAdjustments,
+      message: 'Successfully upgraded to premium'
+    };
+
+  } catch (error) {
+    console.error('Error completing upgrade to premium:', error);
+    throw error;
+  }
+}
+
+/**
  * Downgrade user from premium to free
  * - Calculate prorated API usage
  * - Create immediate invoice for API usage only
  * - Cancel subscription
- * - Update user plan to free
+ * - Update user plan to free with updated limits
+ * 
+ * @param {string} userId - User ID
+ * @param {Object} options - Downgrade options
+ * @returns {Promise<Object>} Downgrade result
  */
-export async function downgradeToPremium(userId) {
+export async function downgradeToPremium(userId, options = {}) {
+  const {
+    resetDailyUsage = false,
+    resetMonthlyUsage = false
+  } = options;
   try {
     // Get user data
     const userRef = doc(db, 'users', userId);
@@ -74,6 +187,10 @@ export async function downgradeToPremium(userId) {
       throw new Error('No active subscription');
     }
 
+    // Get current usage before downgrade
+    const { getCurrentUsageForPlanChange, applyUsageAdjustment } = await import('./usageResetService.js');
+    const currentUsage = await getCurrentUsageForPlanChange(userId);
+
     // Step 1: Calculate prorated usage
     const usageData = await calculateProratedUsage(userId, true);
     
@@ -86,14 +203,27 @@ export async function downgradeToPremium(userId) {
     // Step 3: Cancel Stripe subscription
     await cancelSubscription(userData.stripeSubscriptionId);
 
-    // Step 4: Update user to free plan
+    // Step 4: Get free plan limits and update user
+    const { getLimitsForPlan } = await import('../utils/limitsConfig.js');
+    const freeLimits = getLimitsForPlan('free');
+    
     await updateDoc(userRef, {
       plan: 'free',
       subscriptionStatus: 'cancelled',
       downgradedAt: new Date().toISOString(),
+      // Update limits to free plan limits
+      limits: {
+        chatTokensDaily: freeLimits.chatTokensDaily,
+        chatTokensMonthly: freeLimits.chatTokensMonthly,
+        voiceRequestsDaily: freeLimits.voiceRequestsDaily,
+        chatRequestsDaily: freeLimits.chatRequestsDaily,
+        maxTokensPerRequest: freeLimits.maxTokensPerRequest,
+        maxRequestsPerMinute: freeLimits.maxRequestsPerMinute
+      },
       // Keep subscription data for reference
       previousPlan: 'premium',
-      previousSubscriptionId: userData.stripeSubscriptionId
+      previousSubscriptionId: userData.stripeSubscriptionId,
+      limitsUpdatedAt: new Date().toISOString()
     });
 
     // Step 5: Log downgrade event
@@ -106,10 +236,11 @@ export async function downgradeToPremium(userId) {
       finalInvoiceId: finalInvoice?.id || null,
       finalAmount: usageData.totalCost,
       usagePeriod: `${usageData.currentPeriodStart} to ${usageData.currentDate}`,
-      daysUsed: usageData.daysUsed
+      daysUsed: usageData.daysUsed,
+      newLimits: freeLimits
     });
 
-    console.log(`✅ Downgraded user ${userId} from premium to free`);
+    console.log(`✅ Downgraded user ${userId} from premium to free with updated limits:`, freeLimits);
 
     return {
       finalInvoice: finalInvoice ? {
@@ -119,9 +250,13 @@ export async function downgradeToPremium(userId) {
         usagePeriod: `${usageData.currentPeriodStart.split('T')[0]} to ${usageData.currentDate.split('T')[0]}`,
         daysUsed: usageData.daysUsed,
         apiUsageCost: usageData.totalCost,
-        platformFeeRefund: 0 // No refund for platform fee
+        platformFeeRefund: 0, // No refund for platform fee
+        paymentStatus: finalInvoice.paymentStatus,
+        checkoutUrl: finalInvoice.checkoutUrl,
+        requiresPayment: finalInvoice.requiresPayment
       } : null,
       newPlan: 'free',
+      newLimits: freeLimits,
       subscriptionStatus: 'cancelled',
       message: usageData.totalCost > 0 
         ? `Charged $${usageData.totalCost.toFixed(2)} for ${usageData.daysUsed} days of API usage`
@@ -223,6 +358,7 @@ export async function calculateProratedUsage(userId, detailed = false) {
 
 /**
  * Create immediate invoice for API usage only (no platform fee)
+ * Returns invoice with checkout URL if immediate payment fails
  */
 export async function createImmediateInvoice(userId, usageData) {
   try {
@@ -255,15 +391,54 @@ export async function createImmediateInvoice(userId, usageData) {
       description: `API usage (${usageData.daysUsed} days): ${usageData.breakdown?.length || 0} requests`
     });
 
-    // Finalize and charge immediately
+    // Finalize invoice
     const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+    
+    let paymentStatus = 'pending';
+    let checkoutUrl = null;
     
     // Attempt to pay immediately
     try {
       await stripe.invoices.pay(finalizedInvoice.id);
       console.log(`✅ Immediate payment successful for invoice ${finalizedInvoice.id}`);
+      paymentStatus = 'paid';
     } catch (paymentError) {
-      console.log(`⚠️ Immediate payment failed for invoice ${finalizedInvoice.id}, will retry automatically`);
+      console.log(`⚠️ Immediate payment failed for invoice ${finalizedInvoice.id}, creating checkout URL`);
+      
+      // Create checkout session for manual payment
+      try {
+        const checkoutSession = await stripe.checkout.sessions.create({
+          customer: userData.stripeCustomerId,
+          mode: 'payment',
+          line_items: [
+            {
+              price_data: {
+                currency: 'usd',
+                product_data: {
+                  name: 'Final API Usage Charges',
+                  description: `API usage for ${usageData.daysUsed} days before downgrade`
+                },
+                unit_amount: Math.round(usageData.totalCost * 100)
+              },
+              quantity: 1
+            }
+          ],
+          success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/success?invoice_id=${finalizedInvoice.id}`,
+          cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/cancel?invoice_id=${finalizedInvoice.id}`,
+          metadata: {
+            userId,
+            invoiceId: finalizedInvoice.id,
+            type: 'downgrade_final_payment'
+          }
+        });
+        
+        checkoutUrl = checkoutSession.url;
+        console.log(`✅ Created checkout URL for invoice ${finalizedInvoice.id}: ${checkoutUrl}`);
+        
+      } catch (checkoutError) {
+        console.error('🔥 Error creating checkout session:', checkoutError);
+        // Continue without checkout URL - user can pay via invoice email
+      }
     }
 
     // Record in billing history
@@ -273,12 +448,19 @@ export async function createImmediateInvoice(userId, usageData) {
       amount: usageData.totalCost,
       currency: 'usd',
       type: 'downgrade_final_charge',
-      status: 'pending',
+      status: paymentStatus,
+      checkoutUrl: checkoutUrl,
       createdAt: new Date().toISOString(),
       description: 'Final API usage charges before downgrade'
     });
 
-    return finalizedInvoice;
+    // Return enhanced invoice object with payment info
+    return {
+      ...finalizedInvoice,
+      paymentStatus,
+      checkoutUrl,
+      requiresPayment: paymentStatus === 'pending'
+    };
 
   } catch (error) {
     console.error('Error creating immediate invoice:', error);

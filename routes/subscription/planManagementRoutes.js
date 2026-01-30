@@ -12,7 +12,8 @@ import {
   downgradeToPremium,
   calculateProratedUsage,
   createImmediateInvoice,
-  cancelSubscription
+  cancelSubscription,
+  completeUpgradeToPremium
 } from '../../services/planManagementService.js';
 
 const router = express.Router();
@@ -85,6 +86,74 @@ router.post('/upgrade', verifyFirebaseToken, async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to create upgrade',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+/**
+ * POST /api/plans/upgrade-success
+ * 
+ * Complete upgrade to premium after successful payment
+ * Updates user plan and limits in database
+ * 
+ * Request body: {} (no body required, uses authenticated user)
+ * 
+ * Response:
+ * {
+ *   success: true,
+ *   message: "Successfully upgraded to premium",
+ *   data: {
+ *     newPlan: "premium",
+ *     newLimits: {
+ *       chatTokensDaily: 1000000,
+ *       chatTokensMonthly: 30000000,
+ *       voiceRequestsDaily: 20,
+ *       chatRequestsDaily: 40,
+ *       maxTokensPerRequest: 100000,
+ *       maxRequestsPerMinute: 5000
+ *     },
+ *     subscriptionStatus: "active",
+ *     billingAnniversaryDay: 15,
+ *     currentUsageBeforeUpgrade: {
+ *       dailyTokens: 500000,
+ *       dailyVoiceRequests: 5,
+ *       dailyChatRequests: 10
+ *     },
+ *     usageAdjustments: {
+ *       dailyReset: {
+ *         resetTokens: 500000,
+ *         resetVoiceRequests: 5,
+ *         resetChatRequests: 10
+ *       }
+ *     }
+ *   }
+ * }
+ */
+router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+
+    const result = await completeUpgradeToPremium(uid);
+
+    res.json({
+      success: true,
+      message: result.message,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('🔥 Error completing upgrade:', error.message);
+
+    if (error.message === 'User not found') {
+      return res.status(404).json({
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    res.status(500).json({
+      error: 'Failed to complete upgrade',
       code: 'INTERNAL_ERROR'
     });
   }

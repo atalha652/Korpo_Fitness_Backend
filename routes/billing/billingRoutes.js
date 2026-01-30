@@ -111,21 +111,14 @@ router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
 
     // ============ UPGRADE USER ============
 
-    // Get premium limits from centralized configuration
-    const premiumLimitsConfig = getLimitsForPlan('premium');
-    const premiumLimits = {
-      chatTokensDaily: premiumLimitsConfig.chatTokensDaily,
-      chatTokensMonthly: premiumLimitsConfig.chatTokensMonthly
-    };
-
-    await upgradeToPremium(uid, premiumLimits);
+    // Import the complete upgrade function
+    const { completeUpgradeToPremium } = await import('../../services/planManagementService.js');
+    const result = await completeUpgradeToPremium(uid);
 
     res.json({
       success: true,
-      message: 'Plan upgraded to premium',
-      data: {
-        newLimits: premiumLimits
-      }
+      message: result.message,
+      data: result
     });
 
   } catch (error) {
