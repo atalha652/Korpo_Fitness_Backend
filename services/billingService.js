@@ -131,6 +131,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
 
 /**
  * Generate hourly invoice for premium user
+ * DISABLED - Only using monthly billing now
  * BILLING LOGIC:
  * - Charges platform fee (prorated hourly: $7/month ÷ 730 hours = ~$0.0096/hour)
  * - Charges API usage cost for the specific hour
@@ -141,6 +142,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
  * @param {string} hour - Hour in YYYY-MM-DDTHH format (optional, defaults to current hour)
  * @returns {Promise<Object>} Invoice details
  */
+/*
 export async function generateHourlyInvoice(uid, hour = null) {
   try {
     // If no hour specified, use current hour
@@ -237,6 +239,7 @@ export async function generateHourlyInvoice(uid, hour = null) {
     throw error;
   }
 }
+*/
 
 /**
  * Generate monthly invoice for premium user
@@ -769,6 +772,7 @@ function getNextBillingDate(anniversaryDay) {
 }
 /**
  * Generate hourly invoice email with payment link
+ * DISABLED - Only using monthly billing now
  * @param {Object} params - Email parameters
  * @param {string} params.uid - User ID
  * @param {Object} params.user - User data
@@ -776,6 +780,7 @@ function getNextBillingDate(anniversaryDay) {
  * @param {string} params.invoiceHour - Invoice hour
  * @returns {Promise<Object>} Email result with payment link
  */
+/*
 export async function generateHourlyInvoiceEmailWithPaymentLink({ uid, user, invoiceData, invoiceHour }) {
   try {
     // Generate payment link for the hourly invoice
@@ -910,15 +915,18 @@ export async function generateHourlyInvoiceEmailWithPaymentLink({ uid, user, inv
     throw error;
   }
 }
+*/
 
 /**
  * Track API usage for hourly billing
+ * DISABLED - Only using monthly billing now
  * Call this function whenever a user makes an API request
  * @param {string} uid - User ID
  * @param {number} cost - Cost in USD for this API call
  * @param {Object} metadata - Optional metadata about the API call
  * @returns {Promise<void>}
  */
+/*
 export async function trackHourlyApiUsage(uid, cost, metadata = {}) {
   try {
     if (!uid || cost <= 0) {
@@ -975,13 +983,16 @@ export async function trackHourlyApiUsage(uid, cost, metadata = {}) {
     // Don't throw - usage tracking shouldn't break the API call
   }
 }
+*/
 
 /**
  * Get hourly API usage cost for a specific user and hour
+ * DISABLED - Only using monthly billing now
  * @param {string} uid - User ID
  * @param {string} hour - Hour in YYYY-MM-DDTHH format
  * @returns {Promise<number>} Usage cost in USD
  */
+/*
 async function getHourlyUsageCost(uid, hour) {
   try {
     // Get usage document for this specific hour
@@ -1001,11 +1012,14 @@ async function getHourlyUsageCost(uid, hour) {
     return 0; // Return 0 on error to avoid blocking invoice generation
   }
 }
+*/
 
 /**
  * Get all premium users for hourly billing
+ * DISABLED - Only using monthly billing now
  * @returns {Promise<Array>} List of premium users
  */
+/*
 export async function getPremiumUsersForHourlyBilling() {
   try {
     const usersRef = collection(db, 'users');
@@ -1028,6 +1042,7 @@ export async function getPremiumUsersForHourlyBilling() {
     throw error;
   }
 }
+*/
 
 /**
  * Generate invoice email with payment link

@@ -240,6 +240,7 @@ export async function getInvoicePaymentCheckoutUrl(userId, invoiceData, userEmai
 
 /**
  * Create a Stripe checkout session for hourly invoice payment
+ * DISABLED - Only using monthly billing now
  * This includes hourly platform fee + API usage costs from the hourly invoice
  * @param {Object} params - Hourly invoice payment parameters
  * @param {string} params.userId - User ID (required)
@@ -249,6 +250,7 @@ export async function getInvoicePaymentCheckoutUrl(userId, invoiceData, userEmai
  * @param {string} params.cancelUrl - Cancel redirect URL (optional)
  * @returns {Promise<Object>} Checkout session with URL
  */
+/*
 export async function createHourlyInvoicePaymentCheckoutSession({
   userId,
   userEmail,
@@ -349,15 +351,18 @@ export async function createHourlyInvoicePaymentCheckoutSession({
     throw error;
   }
 }
+*/
 
 /**
  * Get hourly invoice payment checkout URL for a specific user and hour
+ * DISABLED - Only using monthly billing now
  * Convenience function that returns just the URL
  * @param {string} userId - User ID
  * @param {Object} invoiceData - Hourly invoice data object
  * @param {string} userEmail - User email (optional)
  * @returns {Promise<string>} Checkout URL
  */
+/*
 export async function getHourlyInvoicePaymentCheckoutUrl(userId, invoiceData, userEmail = null) {
   try {
     const result = await createHourlyInvoicePaymentCheckoutSession({
@@ -376,5 +381,6 @@ export async function getHourlyInvoicePaymentCheckoutUrl(userId, invoiceData, us
     throw error;
   }
 }
+*/
 
 export { stripe };

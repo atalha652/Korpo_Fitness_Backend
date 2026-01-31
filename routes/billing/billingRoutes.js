@@ -13,7 +13,6 @@ import { getLimitsForPlan } from '../../utils/limitsConfig.js';
 import {
   createUpgradeCheckout,
   generateMonthlyInvoice,
-  generateHourlyInvoice,
   upgradeToPremium
 } from '../../services/billingService.js';
 
@@ -195,6 +194,7 @@ router.get('/invoice', verifyFirebaseToken, async (req, res) => {
 
 /**
  * GET /billing/hourly-invoice
+ * DISABLED - Only using monthly billing now
  * 
  * Get or generate hourly invoice for specific hour
  * Hour format: YYYY-MM-DDTHH (e.g., "2025-01-31T14")
@@ -216,6 +216,7 @@ router.get('/invoice', verifyFirebaseToken, async (req, res) => {
  *   }
  * }
  */
+/*
 router.get('/hourly-invoice', verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
@@ -246,5 +247,6 @@ router.get('/hourly-invoice', verifyFirebaseToken, async (req, res) => {
     });
   }
 });
+*/
 
 export default router;

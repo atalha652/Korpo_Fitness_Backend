@@ -36,7 +36,7 @@ import billingRoutes from "./routes/billing/billingRoutes.js";
 import subscriptionRoutes from "./routes/subscription/subscriptionRoutes.js";
 import planManagementRoutes from "./routes/subscription/planManagementRoutes.js";
 import aiProxyRoutes from "./routes/ai/aiProxyRoutes.js";
-import { getpremiumUsersByAnniversary, generateMonthlyInvoice, generateHourlyInvoice, getPremiumUsersForHourlyBilling, createStripeInvoice } from "./services/billingService.js";
+import { getpremiumUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
 import { getPreviousMonth } from "./services/billingService.js";
 
 dotenv.config();
@@ -220,8 +220,10 @@ cron.schedule("0 0 * * *", async () => {
 });
 
 // =============== HOURLY BILLING CRON JOB ===============
+// DISABLED - Only using monthly billing now
 // Runs every hour at minute 0 (e.g., 14:00, 15:00, 16:00)
 // Generates hourly invoices for all premium users with platform fee + API usage
+/*
 cron.schedule("0 * * * *", async () => {
   console.log("⚡ Starting hourly billing process...");
 
@@ -275,6 +277,7 @@ cron.schedule("0 * * * *", async () => {
     console.error("🔥 Hourly billing job failed:", error.message);
   }
 });
+*/
 // =============== END ANNIVERSARY BILLING ===============
 
 
