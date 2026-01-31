@@ -9,6 +9,7 @@ import multer from 'multer';
 import { verifyFirebaseToken } from '../../middleware/firebaseAuthMiddleware.js';
 import { recordTokenUsage, checkCanUseTokens, getUsageSummary, getUserLimits } from '../../services/usageService.js';
 import { calculateTokenCost } from '../../utils/tokenPricing.js';
+import { trackHourlyApiUsage } from '../../services/billingService.js';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase.js';
 
@@ -147,6 +148,17 @@ router.post('/chat', verifyFirebaseToken, async (req, res) => {
         userLimits.chatTokensDaily,
         userLimits.chatTokensMonthly
       );
+
+      // ============ TRACK HOURLY USAGE FOR BILLING ============
+      if (ispremium && cost > 0) {
+        await trackHourlyApiUsage(uid, cost, {
+          model,
+          promptTokens,
+          completionTokens,
+          endpoint: 'chat',
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (usageError) {
       console.error('Failed to record usage:', usageError.message);
       // Continue anyway - user got the response
@@ -354,6 +366,18 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
         userLimits.chatTokensDaily,
         userLimits.chatTokensMonthly
       );
+
+      // ============ TRACK HOURLY USAGE FOR BILLING ============
+      if (ispremium && cost > 0) {
+        await trackHourlyApiUsage(uid, cost, {
+          model: 'whisper-1',
+          promptTokens,
+          completionTokens,
+          endpoint: 'transcribe',
+          audioFileName: file?.originalname,
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (usageError) {
       console.error('⚠️ Failed to record transcription usage:', usageError.message);
       // Don't fail the request if recording fails
@@ -527,6 +551,19 @@ router.post('/transcribe', verifyFirebaseToken, upload.single('file'), async (re
         userLimits.chatTokensDaily,
         userLimits.chatTokensMonthly
       );
+
+      // ============ TRACK HOURLY USAGE FOR BILLING ============
+      if (userPlan === 'premium' && estimatedCost > 0) {
+        await trackHourlyApiUsage(uid, estimatedCost, {
+          model: 'tts-1',
+          promptTokens,
+          completionTokens,
+          endpoint: 'tts',
+          characterCount,
+          voice,
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (usageError) {
       console.error('Failed to record usage:', usageError.message);
     }
@@ -695,6 +732,20 @@ router.post('/text-to-speech', verifyFirebaseToken, async (req, res) => {
         userLimits.chatTokensDaily,
         userLimits.chatTokensMonthly
       );
+
+      // ============ TRACK HOURLY USAGE FOR BILLING ============
+      if (userPlan === 'premium' && estimatedCost > 0) {
+        await trackHourlyApiUsage(uid, estimatedCost, {
+          model: model || 'tts-1',
+          promptTokens,
+          completionTokens,
+          endpoint: 'tts-stream',
+          characterCount,
+          voice,
+          speed,
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (usageError) {
       console.error('Failed to record usage:', usageError.message);
     }
@@ -958,6 +1009,17 @@ ${getExampleStructure()}`
         userLimits.chatTokensDaily,
         userLimits.chatTokensMonthly
       );
+
+      // ============ TRACK HOURLY USAGE FOR BILLING ============
+      if (ispremium && cost > 0) {
+        await trackHourlyApiUsage(uid, cost, {
+          model: 'gpt-4o-mini',
+          promptTokens,
+          completionTokens,
+          endpoint: 'generate-questions',
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (usageError) {
       console.error('Failed to record usage:', usageError.message);
     }

@@ -13,6 +13,7 @@ import { getLimitsForPlan } from '../../utils/limitsConfig.js';
 import {
   createUpgradeCheckout,
   generateMonthlyInvoice,
+  generateHourlyInvoice,
   upgradeToPremium
 } from '../../services/billingService.js';
 
@@ -187,6 +188,60 @@ router.get('/invoice', verifyFirebaseToken, async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to generate invoice',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+/**
+ * GET /billing/hourly-invoice
+ * 
+ * Get or generate hourly invoice for specific hour
+ * Hour format: YYYY-MM-DDTHH (e.g., "2025-01-31T14")
+ * 
+ * Query params:
+ *   hour: YYYY-MM-DDTHH format (optional, defaults to current hour)
+ * 
+ * Response:
+ * {
+ *   success: true,
+ *   data: {
+ *     uid: "user123",
+ *     hour: "2025-01-31T14",
+ *     platformFee: 0.0096,
+ *     apiUsageCost: 0.0234,
+ *     totalAmount: 0.0330,
+ *     status: "draft" | "pending_payment" | "paid",
+ *     createdAt: "2025-01-31T14:30:45Z"
+ *   }
+ * }
+ */
+router.get('/hourly-invoice', verifyFirebaseToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const { hour } = req.query;
+
+    // ============ GENERATE HOURLY INVOICE ============
+
+    const invoice = await generateHourlyInvoice(uid, hour);
+
+    res.json({
+      success: true,
+      data: invoice
+    });
+
+  } catch (error) {
+    console.error('🔥 Error getting hourly invoice:', error.message);
+
+    if (error.message === 'User not found') {
+      return res.status(404).json({
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    res.status(500).json({
+      error: 'Failed to generate hourly invoice',
       code: 'INTERNAL_ERROR'
     });
   }

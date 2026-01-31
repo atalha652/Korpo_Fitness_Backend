@@ -36,7 +36,7 @@ import billingRoutes from "./routes/billing/billingRoutes.js";
 import subscriptionRoutes from "./routes/subscription/subscriptionRoutes.js";
 import planManagementRoutes from "./routes/subscription/planManagementRoutes.js";
 import aiProxyRoutes from "./routes/ai/aiProxyRoutes.js";
-import { getpremiumUsersByAnniversary, generateMonthlyInvoice, createStripeInvoice } from "./services/billingService.js";
+import { getpremiumUsersByAnniversary, generateMonthlyInvoice, generateHourlyInvoice, getPremiumUsersForHourlyBilling, createStripeInvoice } from "./services/billingService.js";
 import { getPreviousMonth } from "./services/billingService.js";
 
 dotenv.config();
@@ -216,6 +216,63 @@ cron.schedule("0 0 * * *", async () => {
 
   } catch (error) {
     console.error("🔥 Anniversary billing job failed:", error.message);
+  }
+});
+
+// =============== HOURLY BILLING CRON JOB ===============
+// Runs every hour at minute 0 (e.g., 14:00, 15:00, 16:00)
+// Generates hourly invoices for all premium users with platform fee + API usage
+cron.schedule("0 * * * *", async () => {
+  console.log("⚡ Starting hourly billing process...");
+
+  try {
+    // Get current hour in YYYY-MM-DDTHH format
+    const currentHour = new Date().toISOString().slice(0, 13);
+    console.log(`📅 Processing hourly invoices for hour: ${currentHour}`);
+
+    // Get all premium users for hourly billing
+    const premiumUsers = await getPremiumUsersForHourlyBilling();
+    console.log(`📊 Found ${premiumUsers.length} premium users for hourly billing`);
+
+    if (premiumUsers.length === 0) {
+      console.log("✅ No premium users found, skipping hourly billing");
+      return;
+    }
+
+    let processedCount = 0;
+    let skippedCount = 0;
+    let errorCount = 0;
+
+    // Process each premium user
+    for (const user of premiumUsers) {
+      try {
+        // Generate hourly invoice (platform fee + API usage)
+        const invoice = await generateHourlyInvoice(user.uid, currentHour);
+        
+        // Check if invoice was skipped (no significant usage)
+        if (invoice.status === 'no_significant_usage' || invoice.status === 'free_plan') {
+          console.log(`⏭️ Skipped hourly invoice for ${user.uid}: ${invoice.message}`);
+          skippedCount++;
+          continue;
+        }
+        
+        console.log(`✅ Generated hourly invoice for ${user.uid}: $${invoice.totalAmount.toFixed(4)} (Platform: $${invoice.platformFee.toFixed(4)}, API: $${invoice.apiUsageCost.toFixed(4)})`);
+        processedCount++;
+
+      } catch (userError) {
+        console.error(`❌ Failed to generate hourly invoice for ${user.uid}:`, userError.message);
+        errorCount++;
+        // Continue with other users even if one fails
+      }
+    }
+
+    console.log(`✅ Hourly billing process completed for ${currentHour}:`);
+    console.log(`   📊 Processed: ${processedCount} invoices`);
+    console.log(`   ⏭️ Skipped: ${skippedCount} users (no significant usage)`);
+    console.log(`   ❌ Errors: ${errorCount} users`);
+
+  } catch (error) {
+    console.error("🔥 Hourly billing job failed:", error.message);
   }
 });
 // =============== END ANNIVERSARY BILLING ===============

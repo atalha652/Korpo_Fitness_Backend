@@ -130,6 +130,115 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
 }
 
 /**
+ * Generate hourly invoice for premium user
+ * BILLING LOGIC:
+ * - Charges platform fee (prorated hourly: $7/month ÷ 730 hours = ~$0.0096/hour)
+ * - Charges API usage cost for the specific hour
+ * - Sends detailed email invoice with payment link
+ * - Saves invoice to Firestore for tracking
+ * 
+ * @param {string} uid - User ID
+ * @param {string} hour - Hour in YYYY-MM-DDTHH format (optional, defaults to current hour)
+ * @returns {Promise<Object>} Invoice details
+ */
+export async function generateHourlyInvoice(uid, hour = null) {
+  try {
+    // If no hour specified, use current hour
+    const invoiceHour = hour || new Date().toISOString().slice(0, 13);
+
+    // Get user data
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      throw new Error('User not found');
+    }
+
+    const user = userSnap.data();
+
+    // Only premium users get hourly billing
+    if (user.plan !== 'premium') {
+      return {
+        uid,
+        hour: invoiceHour,
+        status: 'free_plan',
+        message: 'No hourly billing for free plan users'
+      };
+    }
+
+    // Calculate hourly platform fee (monthly fee ÷ average hours per month)
+    // $7/month ÷ 730 hours/month (average) = ~$0.0096/hour
+    const hourlyPlatformFee = PLATFORM_FEE / 730;
+
+    // Get API usage cost for this specific hour
+    const hourlyUsageCost = await getHourlyUsageCost(uid, invoiceHour);
+
+    // Calculate total: Hourly platform fee + API usage cost
+    const totalAmount = hourlyPlatformFee + hourlyUsageCost;
+
+    // Skip if total amount is very small (less than $0.01)
+    if (totalAmount < 0.01) {
+      return {
+        uid,
+        hour: invoiceHour,
+        status: 'no_significant_usage',
+        message: 'Usage below minimum billing threshold ($0.01)',
+        hourlyPlatformFee,
+        hourlyUsageCost,
+        totalAmount
+      };
+    }
+
+    const invoiceData = {
+      uid,
+      hour: invoiceHour,
+      platformFee: hourlyPlatformFee,
+      apiUsageCost: hourlyUsageCost,
+      totalAmount,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      dueDate: getInvoiceDueDate(),
+      paidAt: null,
+      stripeInvoiceId: null
+    };
+
+    // Save hourly invoice to Firestore
+    const invoiceRef = doc(db, 'hourly_invoices', `${uid}_${invoiceHour}`);
+    await setDoc(invoiceRef, invoiceData);
+
+    console.log(`✅ Generated HOURLY invoice for ${uid}: $${totalAmount.toFixed(4)} (Platform: $${hourlyPlatformFee.toFixed(4)}, API Usage: $${hourlyUsageCost.toFixed(4)}) for hour ${invoiceHour}`);
+
+    // Send invoice email to user
+    if (user.email) {
+      console.log(`📧 Attempting to send hourly invoice email to ${user.email}...`);
+      try {
+        const emailResult = await generateHourlyInvoiceEmailWithPaymentLink({
+          uid,
+          user,
+          invoiceData,
+          invoiceHour
+        });
+        
+        console.log(`✅ Hourly invoice email sent successfully to ${user.email}`);
+        console.log(`📬 Message ID: ${emailResult.messageId}`);
+      } catch (emailError) {
+        console.error('🔥 Error sending hourly invoice email:', emailError.message);
+        console.error('🔥 Full error:', emailError);
+        // Don't throw - invoice was created successfully
+      }
+    } else {
+      console.log('⚠️ No email address found for user');
+    }
+
+    return invoiceData;
+
+  } catch (error) {
+    console.error('🔥 Error generating hourly invoice:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Generate monthly invoice for premium user
  * BILLING LOGIC:
  * - User pays platform fee on upgrade (e.g., Jan 27)
@@ -658,6 +767,268 @@ function getNextBillingDate(anniversaryDay) {
   
   return nextMonth;
 }
+/**
+ * Generate hourly invoice email with payment link
+ * @param {Object} params - Email parameters
+ * @param {string} params.uid - User ID
+ * @param {Object} params.user - User data
+ * @param {Object} params.invoiceData - Invoice data
+ * @param {string} params.invoiceHour - Invoice hour
+ * @returns {Promise<Object>} Email result with payment link
+ */
+export async function generateHourlyInvoiceEmailWithPaymentLink({ uid, user, invoiceData, invoiceHour }) {
+  try {
+    // Generate payment link for the hourly invoice
+    let paymentLink = null;
+    let paymentLinkError = null;
+    
+    try {
+      const { createHourlyInvoicePaymentCheckoutSession } = await import('./stripe/platformFeeStripeService.js');
+      const checkoutResult = await createHourlyInvoicePaymentCheckoutSession({
+        userId: uid,
+        userEmail: user.email,
+        invoiceData: invoiceData
+      });
+      
+      if (checkoutResult.success) {
+        paymentLink = checkoutResult.checkoutUrl;
+        console.log(`✅ Generated payment link for hourly invoice ${invoiceHour}: ${paymentLink}`);
+      } else {
+        paymentLinkError = checkoutResult.error || 'Failed to create checkout session';
+      }
+    } catch (error) {
+      paymentLinkError = error.message;
+      console.error('⚠️ Could not generate payment link for hourly invoice:', error.message);
+    }
+
+    // Format hour for display (e.g., "2025-01-31T14" -> "2025-01-31 14:00-15:00")
+    const hourDate = new Date(invoiceHour + ':00:00Z');
+    const nextHour = new Date(hourDate.getTime() + 60 * 60 * 1000);
+    const hourDisplay = `${invoiceHour.slice(0, 10)} ${invoiceHour.slice(11)}:00-${String(nextHour.getUTCHours()).padStart(2, '0')}:00 UTC`;
+
+    // Send email with or without payment link
+    const emailResult = await transporter.sendMail({
+      from: `"Korpo Billing" <${process.env.EMAIL_USER}>`,
+      to: user.email,
+      subject: `⚡ Hourly Invoice - $${invoiceData.totalAmount.toFixed(4)} (${hourDisplay})`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">⚡ Hourly Invoice - ${hourDisplay}</h2>
+          
+          <p>Hi ${user.name || 'there'},</p>
+          
+          <p>Your hourly invoice for Korpo premium usage is ready.</p>
+          
+          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="margin-top: 0;">Invoice Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd;">Hour Period</td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd; text-align: right;">${hourDisplay}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd;">Platform Fee (Hourly)</td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd; text-align: right;">$${invoiceData.platformFee.toFixed(4)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd;">API Usage</td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #ddd; text-align: right;">$${invoiceData.apiUsageCost.toFixed(4)}</td>
+              </tr>
+              <tr style="font-weight: bold; font-size: 18px;">
+                <td style="padding: 12px 0;">Total Amount</td>
+                <td style="padding: 12px 0; text-align: right; color: #4CAF50;">$${invoiceData.totalAmount.toFixed(4)}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <p><strong>Due Date:</strong> ${new Date(invoiceData.dueDate).toLocaleDateString()}</p>
+          
+          ${paymentLink ? `
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${paymentLink}" 
+               style="background-color: #4CAF50; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; font-size: 16px;">
+              💳 Pay Hourly Invoice - $${invoiceData.totalAmount.toFixed(4)}
+            </a>
+          </div>
+          
+          <p style="color: #666; font-size: 14px; text-align: center;">
+            Click the button above to pay your hourly invoice securely with Stripe.<br>
+            The payment link expires in 24 hours.
+          </p>
+          ` : `
+          <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="color: #856404; margin: 0; font-size: 14px;">
+              <strong>Payment Link Unavailable:</strong> ${paymentLinkError || 'Unable to generate payment link'}.<br>
+              Please contact support at support@korpo.ai for assistance with payment.
+            </p>
+          </div>
+          `}
+          
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h4 style="margin-top: 0; color: #495057;">Billing Information</h4>
+            <p style="margin: 5px 0; font-size: 14px; color: #6c757d;">Invoice ID: ${uid}_${invoiceHour}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #6c757d;">Billing Period: ${hourDisplay}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #6c757d;">Platform Fee (Hourly): $${invoiceData.platformFee.toFixed(4)}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #6c757d;">API Usage: $${invoiceData.apiUsageCost.toFixed(4)}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #6c757d;">Total Amount: $${invoiceData.totalAmount.toFixed(4)}</p>
+          </div>
+          
+          <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #2196F3;">
+            <h4 style="margin-top: 0; color: #1976D2;">💡 About Hourly Billing</h4>
+            <p style="margin: 5px 0; font-size: 14px; color: #1565C0;">
+              • Platform fee is prorated hourly: $7/month ÷ 730 hours = $${(7/730).toFixed(4)}/hour<br>
+              • API usage is charged based on actual consumption during this hour<br>
+              • All hourly charges will be consolidated in your monthly statement
+            </p>
+          </div>
+          
+          <p>Thank you for using Korpo!</p>
+          
+          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+          
+          <p style="color: #999; font-size: 12px;">
+            Questions? Contact us at support@korpo.ai<br>
+            This is an automated hourly billing email. Please do not reply directly to this message.
+          </p>
+        </div>
+      `
+    });
+
+    console.log(`✅ Hourly invoice email sent successfully to ${user.email}`);
+    console.log(`📬 Message ID: ${emailResult.messageId}`);
+
+    return {
+      success: true,
+      messageId: emailResult.messageId,
+      paymentLink,
+      paymentLinkError,
+      hasPaymentLink: !!paymentLink
+    };
+
+  } catch (error) {
+    console.error('🔥 Error sending hourly invoice email:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Track API usage for hourly billing
+ * Call this function whenever a user makes an API request
+ * @param {string} uid - User ID
+ * @param {number} cost - Cost in USD for this API call
+ * @param {Object} metadata - Optional metadata about the API call
+ * @returns {Promise<void>}
+ */
+export async function trackHourlyApiUsage(uid, cost, metadata = {}) {
+  try {
+    if (!uid || cost <= 0) {
+      return; // Skip invalid tracking
+    }
+
+    // Get current hour in YYYY-MM-DDTHH format
+    const currentHour = new Date().toISOString().slice(0, 13);
+    const usageDocId = `${uid}_${currentHour}`;
+
+    // Get or create hourly usage document
+    const usageRef = doc(db, 'hourly_usage', usageDocId);
+    const usageSnap = await getDoc(usageRef);
+
+    if (usageSnap.exists()) {
+      // Update existing usage
+      const existingData = usageSnap.data();
+      const newTotalCost = (existingData.totalCostUSD || 0) + cost;
+      const newRequestCount = (existingData.requestCount || 0) + 1;
+
+      await updateDoc(usageRef, {
+        totalCostUSD: newTotalCost,
+        requestCount: newRequestCount,
+        lastUpdated: new Date().toISOString(),
+        lastApiCall: {
+          cost,
+          timestamp: new Date().toISOString(),
+          ...metadata
+        }
+      });
+
+      console.log(`📊 Updated hourly usage for ${uid} (${currentHour}): $${newTotalCost.toFixed(4)} (${newRequestCount} requests)`);
+    } else {
+      // Create new usage document
+      await setDoc(usageRef, {
+        uid,
+        hour: currentHour,
+        totalCostUSD: cost,
+        requestCount: 1,
+        createdAt: new Date().toISOString(),
+        lastUpdated: new Date().toISOString(),
+        lastApiCall: {
+          cost,
+          timestamp: new Date().toISOString(),
+          ...metadata
+        }
+      });
+
+      console.log(`📊 Created hourly usage tracking for ${uid} (${currentHour}): $${cost.toFixed(4)}`);
+    }
+
+  } catch (error) {
+    console.error(`🔥 Error tracking hourly API usage for ${uid}:`, error.message);
+    // Don't throw - usage tracking shouldn't break the API call
+  }
+}
+
+/**
+ * Get hourly API usage cost for a specific user and hour
+ * @param {string} uid - User ID
+ * @param {string} hour - Hour in YYYY-MM-DDTHH format
+ * @returns {Promise<number>} Usage cost in USD
+ */
+async function getHourlyUsageCost(uid, hour) {
+  try {
+    // Get usage document for this specific hour
+    const usageDocId = `${uid}_${hour}`;
+    const usageRef = doc(db, 'hourly_usage', usageDocId);
+    const usageSnap = await getDoc(usageRef);
+    
+    if (!usageSnap.exists()) {
+      return 0; // No usage recorded for this hour
+    }
+    
+    const usageData = usageSnap.data();
+    return usageData.totalCostUSD || 0;
+    
+  } catch (error) {
+    console.error(`🔥 Error getting hourly usage cost for ${uid} at ${hour}:`, error.message);
+    return 0; // Return 0 on error to avoid blocking invoice generation
+  }
+}
+
+/**
+ * Get all premium users for hourly billing
+ * @returns {Promise<Array>} List of premium users
+ */
+export async function getPremiumUsersForHourlyBilling() {
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('plan', '==', 'premium'));
+    const querySnapshot = await getDocs(q);
+
+    const users = [];
+    querySnapshot.forEach(doc => {
+      users.push({
+        uid: doc.id,
+        ...doc.data()
+      });
+    });
+
+    console.log(`✅ Found ${users.length} premium users for hourly billing`);
+    return users;
+
+  } catch (error) {
+    console.error('🔥 Error getting premium users for hourly billing:', error.message);
+    throw error;
+  }
+}
+
 /**
  * Generate invoice email with payment link
  * @param {Object} params - Email parameters
