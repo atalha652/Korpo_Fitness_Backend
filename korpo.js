@@ -2662,7 +2662,7 @@ app.post("/api/subscription/createPaymentIntent", async (req, res) => {
     }
 
     const user = userSnap.data();
-    const MONTHLY_PRICE = 700; // $7.00 in cents
+    const MONTHLY_PRICE = 1000; // $10.00 in cents
 
     let stripeCustomerId = user.stripe?.customerId;
 
@@ -2729,7 +2729,7 @@ app.post("/api/subscription/createCheckoutSession", async (req, res) => {
     }
 
     const user = userSnap.data();
-    const MONTHLY_PRICE = 700; // $7.00 in cents
+    const MONTHLY_PRICE = 1000; // $10.00 in cents
 
     let stripeCustomerId = user.stripe?.customerId;
 
@@ -2769,7 +2769,7 @@ app.post("/api/subscription/createCheckoutSession", async (req, res) => {
               description: "30-day subscription to Korpo Fitness",
               images: [],
             },
-            unit_amount: MONTHLY_PRICE,
+            unit_amount: 1000, // $10.00 in cents
           },
           quantity: 1,
         },
@@ -2958,7 +2958,7 @@ app.post("/api/subscription/confirmPayment", async (req, res) => {
             <p>Hello ${user.firstName || "User"},</p>
             <p>Your subscription has been activated successfully.</p>
             <ul>
-              <li><strong>Amount:</strong> $7.00</li>
+              <li><strong>Amount:</strong> $10.00</li>
               <li><strong>Start Date:</strong> ${subscriptionStartDate.toDateString()}</li>
               <li><strong>Expiry Date:</strong> ${subscriptionEndDate.toDateString()}</li>
               <li><strong>Status:</strong> Active ✅</li>
@@ -3236,7 +3236,7 @@ cron.schedule("0 9 * * *", async () => {
             <h2 style="color: #FF9800;">Subscription Expiring Soon!</h2>
             <p>Hello ${user.firstName || "User"},</p>
             <p>Your Korpo Fitness subscription will expire in <strong>3 days</strong> (${endDate.toDateString()}).</p>
-            <p>To avoid interruption, please renew your subscription now for just <strong>$7.00/month</strong>.</p>
+            <p>To avoid interruption, please renew your subscription now for just <strong>$10.00/month</strong>.</p>
             <p style="margin-top: 20px;">
               <a href="https://your-app.com/renew" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Renew Now</a>
             </p>

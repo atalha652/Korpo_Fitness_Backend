@@ -32,7 +32,7 @@ const transporter = nodemailer.createTransport({
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Platform fee for premium users
-const PLATFORM_FEE = 7.00;
+const PLATFORM_FEE = 10.00;
 
 /**
  * Create or get Stripe customer for user
@@ -133,7 +133,7 @@ export async function createUpgradeCheckout(uid, email, successUrl, cancelUrl) {
  * Generate hourly invoice for premium user
  * DISABLED - Only using monthly billing now
  * BILLING LOGIC:
- * - Charges platform fee (prorated hourly: $7/month ÷ 730 hours = ~$0.0096/hour)
+ * - Charges platform fee (prorated hourly: $10/month ÷ 730 hours = ~$0.0137/hour)
  * - Charges API usage cost for the specific hour
  * - Sends detailed email invoice with payment link
  * - Saves invoice to Firestore for tracking
@@ -169,7 +169,7 @@ export async function generateHourlyInvoice(uid, hour = null) {
     }
 
     // Calculate hourly platform fee (monthly fee ÷ average hours per month)
-    // $7/month ÷ 730 hours/month (average) = ~$0.0096/hour
+    // $10/month ÷ 730 hours/month (average) = ~$0.0137/hour
     const hourlyPlatformFee = PLATFORM_FEE / 730;
 
     // Get API usage cost for this specific hour
@@ -881,7 +881,7 @@ export async function generateHourlyInvoiceEmailWithPaymentLink({ uid, user, inv
           <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #2196F3;">
             <h4 style="margin-top: 0; color: #1976D2;">💡 About Hourly Billing</h4>
             <p style="margin: 5px 0; font-size: 14px; color: #1565C0;">
-              • Platform fee is prorated hourly: $7/month ÷ 730 hours = $${(7/730).toFixed(4)}/hour<br>
+              • Platform fee is prorated hourly: $10/month ÷ 730 hours = $${(10/730).toFixed(4)}/hour<br>
               • API usage is charged based on actual consumption during this hour<br>
               • All hourly charges will be consolidated in your monthly statement
             </p>

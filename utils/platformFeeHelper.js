@@ -1,7 +1,7 @@
 /**
  * Platform Fee Helper
  * Handles monthly platform fee logic
- * $7 platform fee is charged once per month on billing anniversary
+ * $10 platform fee is charged once per month on billing anniversary
  */
 
 import { db } from '../firebase.js';
@@ -136,6 +136,6 @@ function getNextBillingDate(anniversaryDay) {
  * @returns {number} Platform fee amount in USD
  */
 export function getPlatformFee() {
-  return 7.00; // $7 platform fee
+  return 10.00; // $10 platform fee
 }
 
