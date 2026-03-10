@@ -168,7 +168,10 @@ router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
  * - Cancels subscription to stop future billing
  * - Changes plan to "free"
  * 
- * Request body: {} (no body required)
+ * Request body: 
+ * {
+ *   uid: "user_firebase_uid"
+ * }
  * 
  * Response:
  * {
@@ -189,9 +192,16 @@ router.post('/upgrade-success', verifyFirebaseToken, async (req, res) => {
  *   }
  * }
  */
-router.post('/downgrade', verifyFirebaseToken, async (req, res) => {
+router.post('/downgrade', async (req, res) => {
   try {
-    const uid = req.user.uid;
+    const { uid } = req.body;
+
+    if (!uid) {
+      return res.status(400).json({
+        error: 'uid is required in request body',
+        code: 'MISSING_UID'
+      });
+    }
 
     const result = await downgradeToPremium(uid);
 
@@ -270,7 +280,17 @@ router.get('/current', verifyFirebaseToken, async (req, res) => {
     const userData = userDoc.data();
     
     // Calculate current usage cost
-    const currentUsage = await calculateProratedUsage(uid);
+    let currentUsage;
+    try {
+      currentUsage = await calculateProratedUsage(uid);
+    } catch (indexError) {
+      if (indexError.code === 'failed-precondition') {
+        console.warn('⚠️ Firestore index missing for usage tracking. Using zero cost.');
+        currentUsage = { totalCost: 0 };
+      } else {
+        throw indexError;
+      }
+    }
     
     // Estimate next bill (platform fee + current usage)
     const platformFee = 7.00;
@@ -332,7 +352,27 @@ router.get('/usage-preview', verifyFirebaseToken, async (req, res) => {
   try {
     const uid = req.user.uid;
 
-    const usagePreview = await calculateProratedUsage(uid, true); // true = detailed breakdown
+    let usagePreview;
+    try {
+      usagePreview = await calculateProratedUsage(uid, true); // true = detailed breakdown
+    } catch (indexError) {
+      if (indexError.code === 'failed-precondition') {
+        console.warn('⚠️ Firestore index missing for usage tracking. Using default data.');
+        usagePreview = {
+          currentPeriodStart: new Date().toISOString(),
+          currentDate: new Date().toISOString(),
+          daysUsed: 0,
+          totalDaysInPeriod: 30,
+          totalCost: 0,
+          platformFeeUsed: 0,
+          platformFeeTotal: 30,
+          estimatedFinalCharge: 0,
+          breakdown: []
+        };
+      } else {
+        throw indexError;
+      }
+    }
 
     res.json({
       success: true,

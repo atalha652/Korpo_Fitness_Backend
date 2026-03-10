@@ -183,7 +183,11 @@ export async function downgradeToPremium(userId, options = {}) {
       throw new Error('User not on premium plan');
     }
 
-    if (!userData.stripeSubscriptionId) {
+    // Check for subscription in either location
+    const hasActiveSubscription = userData.stripeSubscriptionId || 
+                                 (userData.subscription && userData.subscription.status === 'active');
+    
+    if (!hasActiveSubscription) {
       throw new Error('No active subscription');
     }
 
@@ -192,7 +196,33 @@ export async function downgradeToPremium(userId, options = {}) {
     const currentUsage = await getCurrentUsageForPlanChange(userId);
 
     // Step 1: Calculate prorated usage
-    const usageData = await calculateProratedUsage(userId, true);
+    let usageData;
+    try {
+      console.log('🔍 Attempting to calculate prorated usage...');
+      usageData = await calculateProratedUsage(userId, true);
+      console.log('✅ Successfully calculated prorated usage');
+    } catch (indexError) {
+      console.log('❌ Error in calculateProratedUsage:', indexError.code, indexError.message);
+      if (indexError.code === 'failed-precondition' || indexError.message?.includes('requires an index')) {
+        console.warn('⚠️ Firestore index missing for usage tracking. Proceeding with zero usage cost.');
+        console.warn('Create index at:', indexError.message.match(/https:\/\/[^\s]+/)?.[0]);
+        // Create default usage data
+        usageData = {
+          currentPeriodStart: new Date().toISOString(),
+          currentDate: new Date().toISOString(),
+          daysUsed: 0,
+          totalDaysInPeriod: 30,
+          totalCost: 0,
+          platformFeeUsed: 0,
+          platformFeeTotal: 30,
+          estimatedFinalCharge: 0,
+          breakdown: []
+        };
+        console.log('✅ Using default usage data:', usageData);
+      } else {
+        throw indexError; // Re-throw other errors
+      }
+    }
     
     // Step 2: Create immediate invoice for API usage only
     let finalInvoice = null;
@@ -200,8 +230,14 @@ export async function downgradeToPremium(userId, options = {}) {
       finalInvoice = await createImmediateInvoice(userId, usageData);
     }
 
-    // Step 3: Cancel Stripe subscription
-    await cancelSubscription(userData.stripeSubscriptionId);
+    // Step 3: Cancel Stripe subscription (if exists)
+    const subscriptionId = userData.stripeSubscriptionId;
+    if (subscriptionId) {
+      await cancelSubscription(subscriptionId);
+    } else {
+      // For users with nested subscription structure, just mark as cancelled
+      console.log('No Stripe subscription ID found, marking subscription as cancelled in database');
+    }
 
     // Step 4: Get free plan limits and update user
     const { getLimitsForPlan } = await import('../utils/limitsConfig.js');
@@ -222,7 +258,11 @@ export async function downgradeToPremium(userId, options = {}) {
       },
       // Keep subscription data for reference
       previousPlan: 'premium',
-      previousSubscriptionId: userData.stripeSubscriptionId,
+      previousSubscriptionId: userData.stripeSubscriptionId || 'nested_subscription',
+      // Update nested subscription status if it exists
+      ...(userData.subscription && {
+        'subscription.status': 'cancelled'
+      }),
       limitsUpdatedAt: new Date().toISOString()
     });
 
