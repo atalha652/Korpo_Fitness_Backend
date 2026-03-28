@@ -17,10 +17,10 @@ router.post('/webhook', async (req, res) => {
     // Handle the webhook in a service
     await handleRevenueCatWebhook(event);
 
-    res.status(200).json({ success: true });
+    res.status(200).json({ success2: true });
   } catch (error) {
     console.error('❌ RevenueCat webhook error:', error);
-    res.status(500).json({ success: false, error: 'Internal Server Error' });
+    res.status(500).json({ success2: false, error: 'Internal Server Error' });
   }
 });
 
