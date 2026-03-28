@@ -1,6 +1,6 @@
 // routes/revenuecat/revenuecatRoutes.js
-import express from 'express';
-import { handleRevenueCatWebhook } from '../../services/revenueCat/revenueCatServices.js';
+import express from "express";
+import { handleRevenueCatWebhook } from "../../services/revenueCat/revenueCatServices.js";
 
 const router = express.Router();
 
@@ -9,18 +9,20 @@ const router = express.Router();
  * @desc Endpoint to receive RevenueCat webhooks
  * @access Public (RevenueCat will call it)
  */
-router.post('/webhook', async (req, res) => {
+router.post("/webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log('💡 RevenueCat webhook received:', event);
+    console.log("💡 RevenueCat webhook received:", event);
 
     // Handle the webhook in a service
     await handleRevenueCatWebhook(event);
 
-    res.status(200).json({ success2: true });
+    res
+      .status(200)
+      .json({ success: true, message: "Webhook received and processed" });
   } catch (error) {
-    console.error('❌ RevenueCat webhook error:', error);
-    res.status(500).json({ success2: false, error: 'Internal Server Error' });
+    console.error("❌ RevenueCat webhook error:", error);
+    res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 });
 
