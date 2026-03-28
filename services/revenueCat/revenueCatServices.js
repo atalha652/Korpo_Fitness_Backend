@@ -2,12 +2,9 @@
 import { db } from "../../firebase.js";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 
-/**
- * Handle RevenueCat webhook events
- */
-export const handleRevenueCatWebhook = async (event) => {
+export const handleRevenueCatWebhook = async (payload) => {
   try {
-    const subscriberId = event.subscriber?.original_app_user_id;
+    const subscriberId = payload.event?.original_app_user_id || payload.event?.app_user_id;
     if (!subscriberId) {
       console.log("⚠️ RevenueCat event missing subscriberId, skipping");
       return;
@@ -22,10 +19,12 @@ export const handleRevenueCatWebhook = async (event) => {
       return;
     }
 
-    switch (event.type) {
+    const eventType = payload.event.type;
+
+    switch (eventType) {
       case "INITIAL_PURCHASE":
       case "RENEWAL":
-        // Upgrade user to premium
+      case "UNCANCELLATION": // Added uncancellation handling
         await updateDoc(userRef, {
           plan: "premium",
           upgradedAt: new Date().toISOString(),
@@ -35,7 +34,6 @@ export const handleRevenueCatWebhook = async (event) => {
 
       case "CANCELLATION":
       case "EXPIRED":
-        // Downgrade user to free
         await updateDoc(userRef, {
           plan: "free",
           downgradedAt: new Date().toISOString(),
@@ -44,7 +42,7 @@ export const handleRevenueCatWebhook = async (event) => {
         break;
 
       default:
-        console.log("ℹ️ Unhandled RevenueCat event type:", event.type);
+        console.log("ℹ️ Unhandled RevenueCat event type:", eventType);
     }
   } catch (error) {
     console.error("❌ Error handling RevenueCat webhook event:", error);
