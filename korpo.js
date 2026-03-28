@@ -32,6 +32,7 @@ import userTokenHistoryRoutes from "./routes/token/userTokenHistoryRoutes.js";
 import { streamChatController } from "./controllers/openrouter/openrouterStreamController.js";
 import admin from 'firebase-admin';
 import usageRoutes from "./routes/usage/usageRoutes.js";
+import webhook from "./routes/revenueCat/webhook.js";
 import billingRoutes from "./routes/billing/billingRoutes.js";
 import subscriptionRoutes from "./routes/subscription/subscriptionRoutes.js";
 import planManagementRoutes from "./routes/subscription/planManagementRoutes.js";
@@ -3388,6 +3389,9 @@ app.use('/api/ai', aiProxyRoutes);
  * Returns streaming response with input/output tokens
  */
 app.post('/api/openrouter/chat/stream', streamChatController);
+
+//RevenueCat
+app.use('/api/revenuecat', webhook);
 // =============== END OPENROUTER STREAMING CHAT ===============
 
 // ------------------- Start Server -------------------

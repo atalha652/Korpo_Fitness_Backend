@@ -15,6 +15,9 @@ import {
 
 const router = express.Router();
 
+router.get('/getdata', (req, res) => {
+  res.json({ message: 'OpenRouter admin routes are working!' });
+});
 /**
  * @route GET /api/admin/openrouter/status
  * @desc Get current openrouter credits status
