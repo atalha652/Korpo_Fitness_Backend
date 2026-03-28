@@ -1,6 +1,6 @@
 // routes/revenuecat/revenuecatRoutes.js
 import express from 'express';
-import { handleRevenueCatWebhook } from '../../services/revenueCat/revenueCatServices';
+import { handleRevenueCatWebhook } from '../../services/revenueCat/revenueCatServices.js';
 
 const router = express.Router();
 
