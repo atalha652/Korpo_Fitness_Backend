@@ -23,7 +23,7 @@ import {
 } from '../../services/stripe/tokenStripeService.js';
 import { getPlatformFee } from '../../utils/platformFeeHelper.js';
 import { db } from '../../firebase.js';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, increment, addDoc, Timestamp } from 'firebase/firestore';
 import { checkUserBalance, requirePositiveBalance } from '../../middleware/balanceChecker.js';
 
 const router = express.Router();
@@ -282,6 +282,137 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                     );
 
                     console.log(`✅ Tokens added to user ${userId}: ${tokens} tokens`);
+                    
+                    // ---- 🆕 PARTNER COMMISSION LOGIC ----
+                    try {
+                        const userRef = doc(db, 'users', userId);
+                        const userSnap = await getDoc(userRef);
+                        if (userSnap.exists()) {
+                            const user = userSnap.data();
+                            if (user.isPromo && user.promoCodeUsed) {
+                                const promoCodesRef = collection(db, "promoCodes");
+                                const promoQuery1 = query(promoCodesRef, where("code", "==", user.promoCodeUsed));
+                                let promoSnap = await getDocs(promoQuery1);
+                                
+                                if (promoSnap.empty) {
+                                    const promoQuery2 = query(promoCodesRef, where("promoCode", "==", user.promoCodeUsed));
+                                    promoSnap = await getDocs(promoQuery2);
+                                }
+                                
+                                if (!promoSnap.empty) {
+                                    const promoData = promoSnap.docs[0].data();
+                                    const partnerId = promoData.partnerId;
+                                    const promoId = promoSnap.docs[0].id;
+                                    
+                                    if (partnerId) {
+                                        const partnerRef = doc(db, "partners", partnerId);
+                                        const partnerSnap = await getDoc(partnerRef);
+                                        
+                                        if (partnerSnap.exists()) {
+                                            const partnerData = partnerSnap.data();
+                                            const commissionRate = partnerData.commissionRate || 0.2; // default 20%
+                                            const discountRate = partnerData.discountRate || 0;
+                                            
+                                            const finalAmount = session.amount_total / 100;
+                                            const originalAmount = discountRate > 0 ? finalAmount / (1 - discountRate) : finalAmount;
+                                            const discountAmount = originalAmount - finalAmount;
+                                            
+                                            const commissionEarned = finalAmount * commissionRate;
+                                            const companyRevenue = finalAmount - commissionEarned;
+                                            
+                                            await updateDoc(partnerRef, {
+                                                availableBalance: increment(commissionEarned),
+                                                totalPartnerRevenue: increment(commissionEarned),
+                                                totalPromos: increment(1),
+                                                updatedAt: Timestamp.fromDate(new Date())
+                                            });
+                                            console.log(`✅ Partner ${partnerId} rewarded with $${commissionEarned} commission in token webhook.`);
+
+                                            // Add to partnerTracking collection
+                                            const trackingRef = collection(db, "partnerTracking");
+                                            await addDoc(trackingRef, {
+                                                companyRevenue: companyRevenue,
+                                                discountAmount: discountAmount,
+                                                discountPercentage: discountRate,
+                                                finalAmount: finalAmount,
+                                                originalAmount: originalAmount,
+                                                partnerId: partnerId,
+                                                partnerRevenue: commissionEarned,
+                                                partnerSharePercentage: commissionRate,
+                                                promoCode: user.promoCodeUsed,
+                                                promoId: promoId,
+                                                usedAt: Timestamp.fromDate(new Date()),
+                                                userId: userId
+                                            });
+                                            console.log(`✅ Logged transaction in partnerTracking.`);
+                                        }
+                                    }
+                                }
+                            } else if (user.referralUsed) {
+                                // ---- 🆕 AMBASSADOR REFERRAL COMMISSION LOGIC ----
+                                const referralCodesRef = collection(db, "referralCodes");
+                                const refQuery = query(referralCodesRef, where("referralCode", "==", user.referralUsed));
+                                const refSnap = await getDocs(refQuery);
+                                
+                                if (!refSnap.empty) {
+                                    const refData = refSnap.docs[0].data();
+                                    const ambassadorId = refData.ambassadorId;
+                                    const referralId = refSnap.docs[0].id;
+                                    
+                                    const now = new Date();
+                                    const validTo = refData.validTo?.toDate ? refData.validTo.toDate() : (refData.validTo ? new Date(refData.validTo) : new Date(8640000000000000));
+                                    const validFrom = refData.validFrom?.toDate ? refData.validFrom.toDate() : (refData.validFrom ? new Date(refData.validFrom) : new Date(0));
+                                    
+                                    if (ambassadorId && refData.status === "active" && now <= validTo && now >= validFrom) {
+                                        const ambassadorRef = doc(db, "ambassadors", ambassadorId);
+                                        const ambassadorSnap = await getDoc(ambassadorRef);
+                                        
+                                        if (ambassadorSnap.exists()) {
+                                            const ambassadorData = ambassadorSnap.data();
+                                            const commissionRate = ambassadorData.commissionRate || 0.1; // default 10%
+                                            
+                                            const finalAmount = session.amount_total / 100;
+                                            // Since referral discount is hardcoded 10%, original is finalAmount / 0.9
+                                            const originalAmount = finalAmount / 0.9;
+                                            const commissionEarned = originalAmount * commissionRate;
+                                            
+                                            await updateDoc(ambassadorRef, {
+                                                availableBalance: increment(commissionEarned),
+                                                totalReferrals: increment(1),
+                                                updatedAt: Timestamp.fromDate(new Date())
+                                            });
+                                            
+                                            // Increment timesUsed on referral code
+                                            await updateDoc(doc(db, "referralCodes", referralId), {
+                                                timesUsed: increment(1)
+                                            });
+                                            
+                                            console.log(`✅ Ambassador ${ambassadorId} rewarded with $${commissionEarned} commission in token webhook.`);
+
+                                            // Add to referralTracking collection
+                                            const trackingRef = collection(db, "referralTracking");
+                                            await addDoc(trackingRef, {
+                                                ambassadorId: ambassadorId,
+                                                amount: originalAmount,
+                                                commissionEarned: commissionEarned,
+                                                commissionRate: commissionRate,
+                                                referralCode: user.referralUsed,
+                                                referralId: referralId,
+                                                usedAt: Timestamp.fromDate(new Date()),
+                                                userId: userId
+                                            });
+                                            console.log(`✅ Logged transaction in referralTracking.`);
+                                        }
+                                    } else {
+                                        console.log(`⚠️ Referral code ${user.referralUsed} is expired or inactive, skipping commission.`);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (promoError) {
+                        console.error("❌ Error applying commission in token webhook:", promoError);
+                    }
+                    // ---- END COMMISSION LOGIC ----
                 }
             }
         } else if (event.type === 'payment_intent.succeeded') {

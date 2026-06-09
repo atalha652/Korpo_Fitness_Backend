@@ -8,6 +8,8 @@ import Stripe from 'stripe';
 import dotenv from 'dotenv';
 import { calculateTokenCost } from '../../utils/tokenPricing.js';
 import { checkPlatformFeeRequired, getPlatformFee } from '../../utils/platformFeeHelper.js';
+import { db } from '../../firebase.js';
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 
 dotenv.config();
 
@@ -79,7 +81,73 @@ export async function createTokenPurchaseSession({
 
     // Backend recalculates price independently (mandatory validation)
     // Simplified: tokens are free, only platform fee applies
-    const platformFeeAmount = platformFeeRequired ? getPlatformFee() : 0;
+    let platformFeeAmount = platformFeeRequired ? getPlatformFee() : 0;
+    
+    // ---- 🆕 APPLY DISCOUNT FROM PROMO CODE ----
+    try {
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const user = userSnap.data();
+        if (user.isPromo && user.promoCodeUsed) {
+          const promoCodesRef = collection(db, "promoCodes");
+          const promoQuery1 = query(promoCodesRef, where("code", "==", user.promoCodeUsed));
+          let promoSnap = await getDocs(promoQuery1);
+          
+          if (promoSnap.empty) {
+            const promoQuery2 = query(promoCodesRef, where("promoCode", "==", user.promoCodeUsed));
+            promoSnap = await getDocs(promoQuery2);
+          }
+          
+          if (!promoSnap.empty) {
+            const promoData = promoSnap.docs[0].data();
+            const partnerId = promoData.partnerId;
+            
+            if (partnerId) {
+              const partnerRef = doc(db, "partners", partnerId);
+              const partnerSnap = await getDoc(partnerRef);
+              
+              if (partnerSnap.exists()) {
+                const partnerData = partnerSnap.data();
+                const discountRate = partnerData.discountRate || 0; // e.g. 0.2
+                
+                if (discountRate > 0) {
+                  platformFeeAmount = platformFeeAmount * (1 - discountRate);
+                  console.log(`✅ Applied ${discountRate * 100}% discount for partner ${partnerId}. New platform fee: $${platformFeeAmount}`);
+                }
+              }
+            }
+          }
+        } else if (user.referralUsed) {
+          // ---- 🆕 AMBASSADOR REFERRAL DISCOUNT ----
+          const referralRef = collection(db, "referralCodes");
+          const refQuery = query(referralRef, where("referralCode", "==", user.referralUsed));
+          const refSnap = await getDocs(refQuery);
+          
+          if (!refSnap.empty) {
+            const refData = refSnap.docs[0].data();
+            
+            // Check validity
+            const now = new Date();
+            const validTo = refData.validTo?.toDate ? refData.validTo.toDate() : (refData.validTo ? new Date(refData.validTo) : new Date(8640000000000000));
+            const validFrom = refData.validFrom?.toDate ? refData.validFrom.toDate() : (refData.validFrom ? new Date(refData.validFrom) : new Date(0));
+            
+            if (refData.status === "active" && now <= validTo && now >= validFrom) {
+                // Hardcoded 10% discount for ambassador referral
+                const discountRate = 0.1;
+                platformFeeAmount = platformFeeAmount * (1 - discountRate);
+                console.log(`✅ Applied ${discountRate * 100}% referral discount for ambassador ${refData.ambassadorId}. New platform fee: $${platformFeeAmount}`);
+            } else {
+                console.log(`⚠️ Referral code ${user.referralUsed} is expired or inactive.`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error applying discount in tokenStripeService:", error);
+    }
+    // ---- END DISCOUNT LOGIC ----
+
     const totalPrice = platformFeeAmount;
 
     // Create price calculation object for metadata
@@ -90,8 +158,10 @@ export async function createTokenPurchaseSession({
     };
 
     // Validate that provided price matches calculated total price
-    if (price !== undefined && Math.abs(price - totalPrice) > 0.01) { // Use small epsilon for float comparison
-      throw new Error(`Price mismatch: Expected $${price.toFixed(2)}, calculated $${totalPrice.toFixed(2)}`);
+    // Since we now apply a dynamic discount on the backend, we should skip strict validation
+    // if the totalPrice is lower than the expected price (due to a discount).
+    if (price !== undefined && totalPrice > price) { 
+      throw new Error(`Price mismatch: Expected at most $${price.toFixed(2)}, calculated $${totalPrice.toFixed(2)}`);
     }
 
     // Build line items array
