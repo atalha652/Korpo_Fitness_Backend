@@ -37,6 +37,32 @@ async function findPromoDoc(promoCode) {
   return promoSnap.empty ? null : promoSnap.docs[0];
 }
 
+async function hasRevenueCatPartnerCommission(userId, promoCode) {
+  const existingQuery = query(
+    collection(db, "partnerTracking"),
+    where("userId", "==", userId),
+    where("promoCode", "==", promoCode)
+  );
+  const existingSnap = await getDocs(existingQuery);
+  return existingSnap.docs.some((docSnap) => {
+    const data = docSnap.data();
+    return data.source === "revenuecat" || Boolean(data.revenueCatTransactionId);
+  });
+}
+
+async function hasRevenueCatReferralCommission(userId, referralCode) {
+  const existingQuery = query(
+    collection(db, "referralTracking"),
+    where("userId", "==", userId),
+    where("referralCode", "==", referralCode)
+  );
+  const existingSnap = await getDocs(existingQuery);
+  return existingSnap.docs.some((docSnap) => {
+    const data = docSnap.data();
+    return data.source === "revenuecat" || Boolean(data.revenueCatTransactionId);
+  });
+}
+
 async function processPartnerCommission(userId, user, finalAmount, transactionId) {
   const trackingQuery = query(
     collection(db, "partnerTracking"),
@@ -57,7 +83,15 @@ async function processPartnerCommission(userId, user, finalAmount, transactionId
 
   const promoData = promoDoc.data();
   const partnerId = promoData.partnerId;
-  if (!partnerId) return;
+  if (!partnerId) {
+    console.log(`⚠️ Promo code ${user.promoCodeUsed} has no partnerId, skipping commission.`);
+    return;
+  }
+
+  if (await hasRevenueCatPartnerCommission(userId, user.promoCodeUsed)) {
+    console.log(`⚠️ Partner commission already paid for user ${userId} with promo ${user.promoCodeUsed}, skipping.`);
+    return;
+  }
 
   const now = new Date();
   const validTo = promoData.validTo?.toDate
@@ -78,7 +112,10 @@ async function processPartnerCommission(userId, user, finalAmount, transactionId
 
   const partnerRef = doc(db, "partners", partnerId);
   const partnerSnap = await getDoc(partnerRef);
-  if (!partnerSnap.exists()) return;
+  if (!partnerSnap.exists()) {
+    console.log(`⚠️ Partner ${partnerId} not found for promo ${user.promoCodeUsed}, skipping commission.`);
+    return;
+  }
 
   const partnerData = partnerSnap.data();
   const commissionRate = partnerData.commissionRate ?? 0.2;
@@ -129,7 +166,15 @@ async function processAmbassadorCommission(userId, user, finalAmount, transactio
   const referralCodesRef = collection(db, "referralCodes");
   const refQuery = query(referralCodesRef, where("referralCode", "==", user.referralUsed));
   const refSnap = await getDocs(refQuery);
-  if (refSnap.empty) return;
+  if (refSnap.empty) {
+    console.log(`⚠️ Referral code ${user.referralUsed} not found, skipping commission.`);
+    return;
+  }
+
+  if (await hasRevenueCatReferralCommission(userId, user.referralUsed)) {
+    console.log(`⚠️ Ambassador commission already paid for user ${userId} with referral ${user.referralUsed}, skipping.`);
+    return;
+  }
 
   const refData = refSnap.docs[0].data();
   const referralId = refSnap.docs[0].id;
@@ -154,7 +199,10 @@ async function processAmbassadorCommission(userId, user, finalAmount, transactio
 
   const ambassadorRef = doc(db, "ambassadors", ambassadorId);
   const ambassadorSnap = await getDoc(ambassadorRef);
-  if (!ambassadorSnap.exists()) return;
+  if (!ambassadorSnap.exists()) {
+    console.log(`⚠️ Ambassador ${ambassadorId} not found, skipping commission.`);
+    return;
+  }
 
   const ambassadorData = ambassadorSnap.data();
   const commissionRate = ambassadorData.commissionRate ?? 0.1;
@@ -238,7 +286,7 @@ export const handleRevenueCatWebhook = async (payload) => {
         });
         console.log(`✅ User ${subscriberId} upgraded to premium`);
 
-        if (eventType === "INITIAL_PURCHASE") {
+        if (eventType === "INITIAL_PURCHASE" || eventType === "RENEWAL") {
           try {
             await processPromoReferralCommission(subscriberId, user, event);
           } catch (commissionError) {
