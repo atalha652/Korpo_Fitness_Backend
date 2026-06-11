@@ -50,11 +50,31 @@ async function processPartnerCommission(userId, user, finalAmount, transactionId
   }
 
   const promoDoc = await findPromoDoc(user.promoCodeUsed);
-  if (!promoDoc) return;
+  if (!promoDoc) {
+    console.log(`⚠️ Promo code ${user.promoCodeUsed} not found, skipping commission.`);
+    return;
+  }
 
   const promoData = promoDoc.data();
   const partnerId = promoData.partnerId;
   if (!partnerId) return;
+
+  const now = new Date();
+  const validTo = promoData.validTo?.toDate
+    ? promoData.validTo.toDate()
+    : promoData.validTo
+      ? new Date(promoData.validTo)
+      : new Date(8640000000000000);
+  const validFrom = promoData.validFrom?.toDate
+    ? promoData.validFrom.toDate()
+    : promoData.validFrom
+      ? new Date(promoData.validFrom)
+      : new Date(0);
+
+  if (promoData.status !== "active" || now > validTo || now < validFrom) {
+    console.log(`⚠️ Promo code ${user.promoCodeUsed} is expired or inactive, skipping commission.`);
+    return;
+  }
 
   const partnerRef = doc(db, "partners", partnerId);
   const partnerSnap = await getDoc(partnerRef);
@@ -62,7 +82,7 @@ async function processPartnerCommission(userId, user, finalAmount, transactionId
 
   const partnerData = partnerSnap.data();
   const commissionRate = partnerData.commissionRate ?? 0.2;
-  const discountRate = partnerData.discountRate ?? 0;
+  const discountRate = partnerData.discountRate ?? promoData.discountRate ?? 0;
   const originalAmount = discountRate > 0 ? finalAmount / (1 - discountRate) : finalAmount;
   const commissionEarned = finalAmount * commissionRate;
   const companyRevenue = finalAmount - commissionEarned;
@@ -181,7 +201,7 @@ async function processPromoReferralCommission(userId, user, event) {
     return;
   }
 
-  if (user.isPromo && user.promoCodeUsed) {
+  if (user.promoCodeUsed) {
     await processPartnerCommission(userId, user, finalAmount, transactionId);
   } else if (user.referralUsed) {
     await processAmbassadorCommission(userId, user, finalAmount, transactionId);

@@ -700,12 +700,13 @@ app.get("/api/promocode/:userId/verify/:promoCode", async (req, res) => {
       return res.json({ message: "Promo code already used by this user" });
     }
 
-    // 2️⃣ Fetch promo details
-    const promoQuery = query(
-      collection(db, "promoCodes"),
-      where("code", "==", promoCode)
-    );
-    const promoSnap = await getDocs(promoQuery);
+    // 2️⃣ Fetch promo details (support both `code` and `promoCode` fields)
+    const promoCodesRef = collection(db, "promoCodes");
+    let promoSnap = await getDocs(query(promoCodesRef, where("code", "==", promoCode)));
+
+    if (promoSnap.empty) {
+      promoSnap = await getDocs(query(promoCodesRef, where("promoCode", "==", promoCode)));
+    }
 
     if (promoSnap.empty) {
       return res.status(404).json({ error: "Promo code not found" });
@@ -723,9 +724,17 @@ app.get("/api/promocode/:userId/verify/:promoCode", async (req, res) => {
     }
 
     // 4️⃣ If active → valid
+    let discountRate = promoData.discountRate || 0;
+    if (!discountRate && promoData.partnerId) {
+      const partnerSnap = await getDoc(doc(db, "partners", promoData.partnerId));
+      if (partnerSnap.exists()) {
+        discountRate = partnerSnap.data().discountRate || 0;
+      }
+    }
+
     return res.json({
       message: "Promo code is valid",
-      discountRate: promoData.discountRate || 0,
+      discountRate,
     });
   } catch (error) {
     console.error("🔥 Error verifying user promo:", error.message);
@@ -905,13 +914,14 @@ app.post("/api/promoCode/use/:code", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // ✅ 2. Find promo code
-    const promoQuery = query(
-      collection(db, "promoCodes"),
-      where("code", "==", req.params.code)
-    );
+    // ✅ 2. Find promo code (support both `code` and `promoCode` fields)
+    const promoCodesRef = collection(db, "promoCodes");
+    let snapshot = await getDocs(query(promoCodesRef, where("code", "==", req.params.code)));
 
-    const snapshot = await getDocs(promoQuery);
+    if (snapshot.empty) {
+      snapshot = await getDocs(query(promoCodesRef, where("promoCode", "==", req.params.code)));
+    }
+
     if (snapshot.empty) {
       return res.status(404).json({ error: "Promo code not found" });
     }
